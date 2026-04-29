@@ -15,7 +15,7 @@
 4. [Data Models](#4-data-models)
 5. [Module Specifications](#5-module-specifications)
 6. [Statistical Decision Logic](#6-statistical-decision-logic)
-7. [Claude API Integration](#7-claude-api-integration)
+7. [GPT-5.4 / Azure OpenAI Integration](#7-gpt-54--azure-openai-integration)
 8. [Development Standards](#8-development-standards)
 9. [Completed Work](#9-completed-work)
 10. [Planned Work](#10-planned-work)
@@ -116,6 +116,7 @@ hypothesis-testing-agent/
 ├── src/
 │   └── hta/
 │       ├── __init__.py
+│       ├── config.py         # Credentials + defaults       ← added ✅
 │       ├── models/           # Shared Pydantic data models  ← Step 1 ✅
 │       │   ├── data.py
 │       │   ├── design.py
@@ -231,9 +232,9 @@ Responsibilities:
 **Outputs:** `StudyDesign` (published as `EVENT_DESIGN_CAPTURED`)
 
 Responsibilities:
-- Multi-turn dialogue with the user, powered by the Claude API
+- Multi-turn dialogue with the user, powered by **GPT-5.4 via Azure OpenAI**
 - Enforces a structured protocol (see §7.1)
-- Terminates when Claude calls the `capture_study_design` tool with enough information
+- Terminates when the model calls the `capture_study_design` tool with enough information
 - Returns a pre-defined `StudyDesign` in `dry_run=True` mode
 
 ### 5.3 CausalAnalyser (`modules/causal.py`) — Step 4
@@ -276,7 +277,7 @@ Responsibilities:
 Responsibilities:
 - Deterministic caveat generation (6 rules, see §5.6.1)
 - Declarative plot specification generation (no rendering — just `PlotSpec` objects)
-- Claude API calls for `plain_language_summary` and `methods_text` (dry-run returns stubs)
+- **GPT-5.4** calls for `plain_language_summary` and `methods_text` (dry-run returns stubs)
 
 #### 5.6.1 Caveat generation rules
 
@@ -337,13 +338,37 @@ if outcome is BINARY or CATEGORICAL:
 
 ---
 
-## 7. Claude API Integration
+## 7. GPT-5.4 / Azure OpenAI Integration
 
-The Claude API (via the `anthropic` Python SDK) is used in exactly two modules. All other logic is fully deterministic.
+GPT-5.4 (served via the UNC Azure OpenAI endpoint) is used in exactly two modules. All other logic is fully deterministic. The OpenAI Python SDK (`openai>=1.0.0`) is used as the client.
 
-### 7.1 DesignDialogue protocol
+### 7.1 Credentials and configuration
 
-The system prompt given to Claude enforces the following dialogue rules:
+Credentials are loaded at import time from the shared secrets file used across all agents in this suite:
+
+```
+~/.config/trading-agents/secrets.env
+```
+
+`src/hta/config.py` mirrors the pattern established in the stock-research-agent:
+
+```python
+from pathlib import Path
+from dotenv import load_dotenv
+
+load_dotenv(Path.home() / ".config" / "trading-agents" / "secrets.env")
+
+AZURE_OPENAI_API_KEY    = os.getenv("AZURE_OPENAI_API_KEY", "")
+AZURE_OPENAI_BASE_URL   = os.getenv("AZURE_OPENAI_BASE_URL", "https://azureaiapi.cloud.unc.edu/openai/v1/")
+AZURE_OPENAI_DEPLOYMENT = os.getenv("AZURE_OPENAI_DEPLOYMENT", "gpt-5.4")
+MAX_TOKENS              = 28192
+```
+
+No credentials appear in the repository or in any project-level `.env` file.
+
+### 7.2 DesignDialogue protocol
+
+The system prompt given to GPT-5.4 enforces the following dialogue rules:
 
 1. Always ask about observational vs. experimental design first.
 2. Always ask about independence of observations.
@@ -352,11 +377,11 @@ The system prompt given to Claude enforces the following dialogue rules:
 5. Never ask more than 3 questions per turn.
 6. Stop when `StudyDesign` can be fully populated — signal completion by calling the `capture_study_design` tool.
 
-**Tool use:** The dialogue module defines a `capture_study_design` tool. When Claude calls this tool, the module extracts the structured `StudyDesign` and terminates the loop.
+**Tool use:** The dialogue module defines a `capture_study_design` function tool in the OpenAI tool-calling format. When GPT-5.4 calls this tool, the module extracts the structured `StudyDesign` from the tool arguments and terminates the loop.
 
-### 7.2 Reporter text generation
+### 7.3 Reporter text generation
 
-Two Claude API calls are made in the reporter:
+Two GPT-5.4 API calls are made in the reporter:
 
 | Call | Output field | Audience |
 |---|---|---|
@@ -377,7 +402,7 @@ These constraints apply to every step without exception.
 | **Pydantic v2** | All shared data structures use `BaseModel`; no raw dicts between modules |
 | **Docstrings** | Every public function has a docstring explaining intent, not implementation |
 | **Dry-run parameter** | Any external API call accepts `dry_run: bool = True` |
-| **No hardcoded secrets** | Credentials loaded from `.env` via `python-dotenv` |
+| **No hardcoded secrets** | Credentials loaded from `~/.config/trading-agents/secrets.env` via `src/hta/config.py`; no secrets in-repo |
 | **Module independence** | No direct imports between modules; only through models + event bus |
 | **Tests gate progress** | Step N+1 does not start until Step N tests pass |
 | **Coverage target** | ≥ 80% line coverage across `src/hta/` |
@@ -465,7 +490,7 @@ Key requirements:
 **Goal:** `src/hta/modules/dialogue.py` and `src/hta/modules/causal.py`
 
 Key requirements:
-- Dialogue: multi-turn Claude API interaction; tool-call termination
+- Dialogue: multi-turn GPT-5.4 (Azure OpenAI) interaction; tool-call termination via `capture_study_design`
 - Causal: DAG construction from confounder list; adjustment set identification
 - Both modules: `dry_run=True` returns pre-defined output without API calls
 
@@ -508,7 +533,7 @@ Key requirements:
 Key requirements:
 - All 6 deterministic caveat rules implemented (§5.6.1)
 - Generates `PlotSpec` objects for distribution, box plots, QQ-plots, scatter
-- Claude API calls for `plain_language_summary` and `methods_text`
+- GPT-5.4 (Azure OpenAI) calls for `plain_language_summary` and `methods_text`
 
 **Deliverable:** `tests/test_reporter.py` — all 6 caveat rules, dry-run report assembly.
 
@@ -557,6 +582,19 @@ The project is ready for statistician review when all boxes below are checked:
 
 ## 12. Environment Setup
 
+### Prerequisites
+
+Credentials are shared across the agent suite. Ensure `~/.config/trading-agents/secrets.env`
+exists and contains:
+
+```
+AZURE_OPENAI_API_KEY=<your key>
+AZURE_OPENAI_BASE_URL=https://azureaiapi.cloud.unc.edu/openai/v1/
+AZURE_OPENAI_DEPLOYMENT=gpt-5.4
+```
+
+`src/hta/config.py` loads this file automatically — no further setup is needed.
+
 ### First-time setup
 
 ```bash
@@ -568,10 +606,6 @@ pip install -e ".[dev]"
 # Option B: venv
 python3.11 -m venv .venv && source .venv/bin/activate
 pip install -e ".[dev]"
-
-# Copy environment variables
-cp .env.example .env
-# Edit .env: add ANTHROPIC_API_KEY
 ```
 
 ### Running the test suite
@@ -598,4 +632,4 @@ hta run --data data.csv --hypothesis "Group A < Group B" --group group --outcome
 
 ---
 
-*This document is updated at the end of each completed step. Last updated: Step 1.*
+*This document is updated at the end of each completed step. Last updated: switched LLM backend to GPT-5.4 / Azure OpenAI.*

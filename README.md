@@ -18,23 +18,24 @@ models (`src/hta/models/`). No direct imports between modules.
 ## Requirements
 
 - Python ≥ 3.11
-- An Anthropic API key (for the dialogue and reporter modules)
+- Access to the shared secrets file at `~/.config/trading-agents/secrets.env`
+  (contains `AZURE_OPENAI_API_KEY`, `AZURE_OPENAI_BASE_URL`, `AZURE_OPENAI_DEPLOYMENT`)
+
+The LLM backend is **GPT-5.4 via Azure OpenAI** (UNC endpoint). Credentials are shared
+across the trading-agent suite and loaded automatically from the secrets file — no
+per-project `.env` setup is required.
 
 ## Installation
 
 ```bash
-git clone <repo>
-cd hypothesis-testing-agent
+git clone git@github.com:zhengwu/Better_Testing_Agent.git
+cd Better_Testing_Agent
 
-# Create and activate a virtual environment
-python -m venv .venv && source .venv/bin/activate   # or: conda create -n hta python=3.11
+# Create and activate a virtual environment (conda recommended)
+conda create -n hta python=3.11 && conda activate hta
 
 # Install the package with dev dependencies
 pip install -e ".[dev]"
-
-# Configure environment variables
-cp .env.example .env
-# Edit .env and add your ANTHROPIC_API_KEY
 ```
 
 ## Running tests
