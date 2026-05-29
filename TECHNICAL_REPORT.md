@@ -331,7 +331,7 @@ if outcome is BINARY or CATEGORICAL:
 | WILCOXON_SIGNED_RANK | Matched-pairs rank-biserial r | Cliff's delta variant |
 | ONE_WAY_ANOVA | η² and ω² | SS decomposition |
 | KRUSKAL_WALLIS | ε² | `(H − k + 1) / (n − k)` |
-| CHI_SQUARED | Cramér's V | `√(χ²/n·min(r−1,c−1))` |
+| CHI_SQUARED | Cramér's V | `√(χ² / (n · min(r−1, c−1)))` — note grouping of the denominator |
 | FISHER_EXACT | Odds ratio | From contingency table |
 | PEARSON_CORRELATION | r (is its own effect size) | Fisher's z CI |
 | SPEARMAN_CORRELATION | ρ (is its own effect size) | Bootstrap CI |
@@ -565,6 +565,41 @@ Tag the commit `v0.1.0-statistician-review` and distribute to co-investigators.
 
 ---
 
+## 10b. Design Review Notes (2026-05-29)
+
+These are open methodological questions raised during design review. They are flagged here (rather than silently changed) because several touch decisions the statistician co-investigators should rule on before Step 5/6 implementation. They are ordered roughly by severity.
+
+### Correctness issues to resolve before implementation
+
+1. **Normality-test-gated test selection is fragile in both directions.** `NormalityTest.is_normal = (p > 0.05)` is used as a hard switch (e.g. `if normal → INDEPENDENT_T else MANN_WHITNEY_U`). Significance tests for normality have low power at small N (so non-normal data passes) and reject trivial, harmless departures at large N (so usable data fails). The "test the assumption, then pick the test" pattern also inflates the overall Type I error rate because the second test is conditioned on the first. Recommendation: treat normality as one input among several (sample size, magnitude of skew/kurtosis, robustness of the candidate test) rather than a binary gate, and/or prefer rank-based or robust methods by default. Statistician A should sign off on the policy.
+
+2. **KS branch for N > 2000 is statistically invalid as specified.** A one-sample Kolmogorov–Smirnov test comparing data to a normal distribution whose mean and SD are *estimated from that same data* does not have the standard KS null distribution — it requires the Lilliefors correction. As written (§5.1, §10 Step 3), the N > 2000 path would produce anti-conservative p-values. Also, at N > 2000 essentially any real dataset will be flagged non-normal, making the test nearly useless for selection. Recommendation: drop the formal test at large N in favor of effect-magnitude heuristics, or use Lilliefors/Anderson–Darling explicitly.
+
+3. **Welch vs. Student via a variance pretest (Levene) repeats the same pretest problem.** Current §6 logic chooses Student's t when variances are "equal." The modern recommendation is to use Welch's t unconditionally for between-subjects continuous comparisons — it is nearly as powerful under equal variances and far safer under unequal variances, with no pretest. Recommendation: consider making `WELCH_T` the default and reserving `INDEPENDENT_T` for an explicit user override.
+
+4. **"Report power when computable" risks reporting observed (post-hoc) power.** Observed power is a deterministic monotone function of the p-value and adds no information; APA and most methodologists discourage it. Recommendation: report *a priori* or *sensitivity* power (minimum detectable effect at the observed N) instead, and never compute power from the observed effect size. The `WARNING: power < 0.80` caveat (§5.6.1) should be re-specified accordingly.
+
+### Scope / consistency gaps
+
+5. **`LINEAR_REGRESSION` and `LOGISTIC_REGRESSION` are in the `StatisticalTest` enum (14 members) but absent from the decision tree (§6) and the effect-size table (which lists 11).** Either remove them from the enum for v0.1.0 or add their selection rules, assumption checks, and effect sizes. As-is, the selector can never return them, which will confuse reviewers.
+
+6. **`FISHER_EXACT` / odds-ratio effect size is only defined for 2×2 tables, but the tree branches on "two categorical variables" generically.** For R×C tables, Fisher's exact generalizes but the odds ratio does not; Cramér's V is the appropriate effect size. The selector and executor need an explicit 2×2-vs-R×C distinction.
+
+7. **ANOVA / Kruskal–Wallis omnibus results need a post-hoc and correction policy.** Multiple comparisons are currently only an `INFO` caveat. For 3+ groups the report should specify the planned follow-up (e.g. Tukey HSD, Dunn's test) and the family-wise or FDR correction, or explicitly state that none is performed and why.
+
+### Architecture / configuration
+
+8. **The secrets path couples this project to an unrelated one.** `config.py` loads credentials from `~/.config/trading-agents/secrets.env` (§7.1, §12). A hypothesis-testing agent reading a "trading-agents" secrets file is a copy-paste artifact that creates a hidden cross-project dependency and is confusing to auditors. Recommendation: move to a project-neutral path (e.g. `~/.config/hta/secrets.env`) or a shared, neutrally-named location, and update the "No hardcoded secrets" standard text accordingly.
+
+9. **Event bus may be heavier than the linear pipeline needs (low priority).** The pipeline is strictly linear (profile → design → select → execute → report). Synchronous pub/sub is defensible for swappability/mocking, but reviewers may ask why a direct call chain wasn't used. Worth a one-line justification in §2 or §3 so the choice reads as deliberate, not incidental.
+
+### Minor
+
+10. `MAX_TOKENS = 28192` (§7.1) is an unusual value — confirm it is intentional and within the deployment's limit.
+11. Header reads "Step 1 of 8 complete," but `config.py` is marked "added ✅" outside the numbered steps. Fold config into a numbered step (or note it as Step 0) so the step ledger stays authoritative.
+
+---
+
 ## 11. Definition of Done
 
 The project is ready for statistician review when all boxes below are checked:
@@ -632,4 +667,4 @@ hta run --data data.csv --hypothesis "Group A < Group B" --group group --outcome
 
 ---
 
-*This document is updated at the end of each completed step. Last updated: switched LLM backend to GPT-5.4 / Azure OpenAI.*
+*This document is updated at the end of each completed step. Last updated 2026-05-29: added §10b Design Review Notes (methodology + config concerns for statistician sign-off) and corrected the Cramér's V denominator grouping in §6.*
