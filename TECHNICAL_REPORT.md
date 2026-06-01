@@ -179,7 +179,7 @@ All shared data structures are defined in `src/hta/models/` as **Pydantic v2** m
 
 | Model | Purpose | Key fields |
 |---|---|---|
-| `StatisticalTest` | Enum: 14 tests | see §6 |
+| `StatisticalTest` | Enum: 17 tests | see §6 |
 | `AssumptionStatus` | Enum | `MET`, `VIOLATED`, `UNTESTABLE`, `MARGINAL` |
 | `AssumptionCheck` | One assumption result | name, status, test_used, statistic, p_value, note |
 | `EffectSize` | Effect size with CI | measure_name, value, interpretation, ci_lower, ci_upper |
@@ -265,6 +265,7 @@ Responsibilities:
 
 Responsibilities:
 - Executes the selected test using scipy, pingouin, or statsmodels
+- Executes BET/MaxBET/BEAST via the **rpy2** bridge to the R `BET` package (v0.5.4+); see §6 and §12 for setup
 - Computes appropriate effect size with 95% CI (see §6 for per-test details)
 - Runs and records all relevant assumption checks before the main test
 - Reports power when computable
@@ -309,9 +310,10 @@ if outcome is CONTINUOUS:
     if 3+ groups:
         if normal  → ONE_WAY_ANOVA
         else       → KRUSKAL_WALLIS
-    if continuous predictor (correlation):
-        if normal  → PEARSON_CORRELATION
-        else       → SPEARMAN_CORRELATION
+    if continuous predictor (correlation / independence):
+        if linear relationship expected and normal  → PEARSON_CORRELATION
+        if monotone relationship expected           → SPEARMAN_CORRELATION
+        if nonlinear or complex dependence expected → MAXBET (default) or BEAST
 
 if outcome is BINARY or CATEGORICAL:
     if two categorical variables:
@@ -335,6 +337,60 @@ if outcome is BINARY or CATEGORICAL:
 | FISHER_EXACT | Odds ratio | From contingency table |
 | PEARSON_CORRELATION | r (is its own effect size) | Fisher's z CI |
 | SPEARMAN_CORRELATION | ρ (is its own effect size) | Bootstrap CI |
+| BET / MAXBET / BEAST | BET symmetry statistic + depth | No standardised effect size; report maximum symmetry statistic, depth at which significance was found, and normalised mutual information as a supplementary measure |
+
+### BET (Binary Expansion Testing) — methodology note
+
+BET was developed by Kai Zhang (UNC Chapel Hill) and is described in *"BET on Independence"* (JASA, 2019). It is the appropriate choice when the user suspects any form of statistical dependence between two continuous variables that is not necessarily linear or monotone.
+
+**Algorithm:**
+1. Rank-transform both variables to [0, 1] via the empirical CDF (producing the empirical copula).
+2. Binary-expand each observation to depth *d* — i.e., extract the first *d* bits of its binary representation.
+3. Compute cross-product symmetry statistics for all binary digit pairs via the Hadamard transform. These are complete sufficient statistics for any form of dependence in the copula.
+4. The test statistic is the maximum symmetry statistic across all combinations and depths; the reference distribution is chi-squared.
+
+**Variants:**
+
+| Enum value | R function | When to use |
+|---|---|---|
+| `BET` | `BET(x, y, depth=d)` | Fixed depth; rarely preferred |
+| `MAXBET` | `MaxBET(x, y, max.depth=8)` | **Default.** Adapts depth automatically; recommended for most analyses |
+| `BEAST` | `BEAST(x, y)` | Data-adaptive weights; most robust when dependence structure is entirely unknown |
+
+**Selection trigger:** `StudyDesign.notes` contains `"nonlinear"` or `"complex"` (populated by DesignDialogue rule 7).
+
+**Assumptions:**
+- Both variables must be continuous (no ties; discrete data requires continuity correction).
+- No normality assumption.
+- No monotonicity assumption.
+- Default `max.depth = 8` is appropriate for N ≥ 50; for very small samples (N < 30) use `max.depth = 4`.
+
+**Assumption checks to record in `AssumptionCheck`:**
+
+| Check | Method | Flag as |
+|---|---|---|
+| Continuity | Both variables have no ties | `VIOLATED` if ties > 5% |
+| Minimum sample size | N ≥ 20 per variable | `VIOLATED` if not met |
+| Depth adequacy | `max.depth` ≤ ⌊log₂(N)⌋ | `WARNING` if exceeded |
+
+**Implementation:** Executed via **rpy2** bridge to the R `BET` package. See §12 for installation. The executor calls `MaxBET` by default; `BEAST` is used when the selector flag `use_beast=True` is set (reserved for a future user override).
+
+```python
+import rpy2.robjects as ro
+from rpy2.robjects.packages import importr
+
+_BET = importr("BET")
+
+def run_maxbet(x: list[float], y: list[float], max_depth: int = 8) -> dict[str, float]:
+    result = _BET.MaxBET(ro.FloatVector(x), ro.FloatVector(y), max_depth)
+    return {
+        "statistic": float(result.rx2("statistic")[0]),
+        "p_value":   float(result.rx2("p.value")[0]),
+        "depth":     float(result.rx2("depth")[0]),
+    }
+```
+
+**Future work:** A pure-numpy reimplementation would remove the R dependency and improve portability. The Hadamard-transform approach maps directly to numpy operations and is feasible for v0.2.0.
 
 ---
 
@@ -378,6 +434,8 @@ The system prompt given to GPT-5.4 enforces the following dialogue rules:
 6. Stop when `StudyDesign` can be fully populated — signal completion by calling the `capture_study_design` tool.
 
 **Tool use:** The dialogue module defines a `capture_study_design` function tool in the OpenAI tool-calling format. When GPT-5.4 calls this tool, the module extracts the structured `StudyDesign` from the tool arguments and terminates the loop.
+
+Rule 7 (added for BET support): When the user's hypothesis involves association or dependence between two continuous variables, ask: *"Do you expect the relationship to be linear, monotone, or potentially nonlinear/complex?"* The answer is stored in `StudyDesign.notes` and used by the selector to choose between Pearson, Spearman, and BET (see §6).
 
 ### 7.3 Reporter text generation
 
@@ -507,9 +565,9 @@ Key requirements:
 - `get_selection_rationale(test, profile, design) -> str`
 - Subscribes to `EVENT_DESIGN_CAPTURED`; publishes `EVENT_TEST_SELECTED`
 
-**Deliverable:** `tests/test_selector.py` — one test per test type; edge cases for borderline normality and unequal group sizes.
+**Deliverable:** `tests/test_selector.py` — one test per test type; edge cases for borderline normality and unequal group sizes; three BET-path cases (linear → Pearson, monotone → Spearman, nonlinear → MaxBET).
 
-> **Statistician review checkpoint:** Statistician A will validate the decision tree at this step.
+> **Statistician review checkpoint:** Statistician A will validate the decision tree at this step, including the BET selection trigger.
 
 ---
 
@@ -518,11 +576,12 @@ Key requirements:
 **Goal:** `src/hta/modules/executor.py` — runs the selected test and returns `TestResult`
 
 Key requirements:
-- Implements all 11 test + effect size combinations in §6
-- Assumption checks before the main test (normality, variance homogeneity, sample size adequacy)
-- Uses scipy, pingouin, and/or statsmodels
+- Implements all 11 existing test + effect size combinations in §6
+- Implements BET/MaxBET/BEAST via rpy2 bridge (see §6 BET methodology note); `rpy2` added as a runtime dependency in `pyproject.toml`
+- Assumption checks before the main test (normality, variance homogeneity, sample size adequacy; continuity and depth-adequacy checks for BET)
+- Uses scipy, pingouin, and/or statsmodels for non-BET tests
 
-**Deliverable:** `tests/test_executor.py` — known datasets verified against reference outputs (R or textbook).
+**Deliverable:** `tests/test_executor.py` — known datasets verified against reference outputs (R or textbook); BET tests cross-validated against direct R `BET::MaxBET` output.
 
 ---
 
@@ -630,6 +689,29 @@ AZURE_OPENAI_DEPLOYMENT=gpt-5.4
 
 `src/hta/config.py` loads this file automatically — no further setup is needed.
 
+### R and BET package (required for BET/MaxBET/BEAST tests)
+
+The BET executor uses rpy2 to call the R `BET` package. R must be installed separately from the Python environment.
+
+```bash
+# 1. Install R (macOS — via Homebrew)
+brew install r
+
+# 2. Install the BET package from within R
+R -e "install.packages('BET', repos='https://cloud.r-project.org')"
+
+# 3. Install rpy2 into the Python environment (added to pyproject.toml [project.dependencies])
+pip install rpy2
+```
+
+To verify the bridge works:
+
+```bash
+python3 -c "from rpy2.robjects.packages import importr; importr('BET'); print('BET OK')"
+```
+
+If R is not installed, BET tests will be skipped (`pytest.importorskip("rpy2")`); all other tests continue to pass.
+
 ### First-time setup
 
 ```bash
@@ -667,4 +749,4 @@ hta run --data data.csv --hypothesis "Group A < Group B" --group group --outcome
 
 ---
 
-*This document is updated at the end of each completed step. Last updated 2026-05-29: added §10b Design Review Notes (methodology + config concerns for statistician sign-off) and corrected the Cramér's V denominator grouping in §6.*
+*This document is updated at the end of each completed step. Last updated 2026-06-01: added BET (Binary Expansion Testing) integration — §6 decision tree extended with BET/MaxBET/BEAST branch, BET methodology note added (algorithm, variants, assumptions, assumption checks, rpy2 implementation sketch), §4.3 enum count updated (14→17), §5.2 DesignDialogue rule 7 added, §5.5 executor updated, Steps 5/6 planned-work requirements updated, §12 R+rpy2 setup added. Previous update 2026-05-29: §10b Design Review Notes and Cramér's V fix.*
