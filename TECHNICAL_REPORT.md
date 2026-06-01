@@ -400,19 +400,16 @@ GPT-5.4 (served via the UNC Azure OpenAI endpoint) is used in exactly two module
 
 ### 7.1 Credentials and configuration
 
-Credentials are loaded at import time from the shared secrets file used across all agents in this suite:
+Credentials are loaded at import time from a `.env` file at the **project root** (i.e., the same directory as `pyproject.toml`). This file is listed in `.gitignore` and never committed.
 
-```
-~/.config/trading-agents/secrets.env
-```
-
-`src/hta/config.py` mirrors the pattern established in the stock-research-agent:
+`src/hta/config.py`:
 
 ```python
 from pathlib import Path
 from dotenv import load_dotenv
 
-load_dotenv(Path.home() / ".config" / "trading-agents" / "secrets.env")
+# Two levels up from src/hta/config.py → project root
+load_dotenv(Path(__file__).parent.parent.parent / ".env")
 
 AZURE_OPENAI_API_KEY    = os.getenv("AZURE_OPENAI_API_KEY", "")
 AZURE_OPENAI_BASE_URL   = os.getenv("AZURE_OPENAI_BASE_URL", "https://azureaiapi.cloud.unc.edu/openai/v1/")
@@ -420,7 +417,7 @@ AZURE_OPENAI_DEPLOYMENT = os.getenv("AZURE_OPENAI_DEPLOYMENT", "gpt-5.4")
 MAX_TOKENS              = 28192
 ```
 
-No credentials appear in the repository or in any project-level `.env` file.
+No credentials are hardcoded in the repository. The `.env` file is the single source of truth for this project.
 
 ### 7.2 DesignDialogue protocol
 
@@ -460,7 +457,7 @@ These constraints apply to every step without exception.
 | **Pydantic v2** | All shared data structures use `BaseModel`; no raw dicts between modules |
 | **Docstrings** | Every public function has a docstring explaining intent, not implementation |
 | **Dry-run parameter** | Any external API call accepts `dry_run: bool = True` |
-| **No hardcoded secrets** | Credentials loaded from `~/.config/trading-agents/secrets.env` via `src/hta/config.py`; no secrets in-repo |
+| **No hardcoded secrets** | Credentials loaded from `.env` at the project root via `src/hta/config.py`; `.env` is git-ignored and never committed |
 | **Module independence** | No direct imports between modules; only through models + event bus |
 | **Tests gate progress** | Step N+1 does not start until Step N tests pass |
 | **Coverage target** | ≥ 80% line coverage across `src/hta/` |
@@ -648,7 +645,7 @@ These are open methodological questions raised during design review. They are fl
 
 ### Architecture / configuration
 
-8. **The secrets path couples this project to an unrelated one.** `config.py` loads credentials from `~/.config/trading-agents/secrets.env` (§7.1, §12). A hypothesis-testing agent reading a "trading-agents" secrets file is a copy-paste artifact that creates a hidden cross-project dependency and is confusing to auditors. Recommendation: move to a project-neutral path (e.g. `~/.config/hta/secrets.env`) or a shared, neutrally-named location, and update the "No hardcoded secrets" standard text accordingly.
+8. **The secrets path coupling has been resolved.** `config.py` now loads from `.env` at the project root (§7.1, §12). The previous cross-project dependency on `~/.config/trading-agents/secrets.env` has been removed. ✅
 
 9. **Event bus may be heavier than the linear pipeline needs (low priority).** The pipeline is strictly linear (profile → design → select → execute → report). Synchronous pub/sub is defensible for swappability/mocking, but reviewers may ask why a direct call chain wasn't used. Worth a one-line justification in §2 or §3 so the choice reads as deliberate, not incidental.
 
@@ -678,8 +675,7 @@ The project is ready for statistician review when all boxes below are checked:
 
 ### Prerequisites
 
-Credentials are shared across the agent suite. Ensure `~/.config/trading-agents/secrets.env`
-exists and contains:
+Create a `.env` file at the project root (same directory as `pyproject.toml`) with:
 
 ```
 AZURE_OPENAI_API_KEY=<your key>
@@ -687,7 +683,7 @@ AZURE_OPENAI_BASE_URL=https://azureaiapi.cloud.unc.edu/openai/v1/
 AZURE_OPENAI_DEPLOYMENT=gpt-5.4
 ```
 
-`src/hta/config.py` loads this file automatically — no further setup is needed.
+`.env` is listed in `.gitignore` — it will never be committed. `src/hta/config.py` loads it automatically at import time.
 
 ### R and BET package (required for BET/MaxBET/BEAST tests)
 

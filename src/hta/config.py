@@ -1,10 +1,4 @@
-"""Central configuration for HTA — loads credentials from the shared secrets file.
-
-Secrets are stored outside any repo at ~/.config/trading-agents/secrets.env,
-following the same convention used across the trading-agent suite.
-No credentials are read from environment variables injected by CI or .env
-files in the project directory; the shared file is the single source of truth.
-"""
+"""Central configuration for HTA — loads credentials from the project .env file."""
 
 from __future__ import annotations
 
@@ -13,8 +7,8 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
-# Shared secrets across all agents — stored outside any project/repo directory
-_env_path = Path.home() / ".config" / "trading-agents" / "secrets.env"
+# Load from .env at the project root (two levels up from this file: src/hta/config.py)
+_env_path = Path(__file__).parent.parent.parent / ".env"
 load_dotenv(_env_path)
 
 # === Azure OpenAI (GPT-5.4, primary LLM) ===
