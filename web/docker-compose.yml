@@ -1,0 +1,25 @@
+services:
+  backend:
+    build:
+      context: ..
+      dockerfile: web/Dockerfile.backend
+    ports:
+      - "8000:8000"
+    volumes:
+      - session_data:/app/web/data/sessions
+    env_file:
+      - ../.env
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: ..
+      dockerfile: web/Dockerfile.frontend
+    ports:
+      - "80:80"
+    depends_on:
+      - backend
+    restart: unless-stopped
+
+volumes:
+  session_data:

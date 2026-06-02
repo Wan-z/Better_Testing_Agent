@@ -1,0 +1,219 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>HTA Report — {{ session_id[:8] }}</title>
+<script src="https://cdn.plot.ly/plotly-2.35.2.min.js"></script>
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: Georgia, 'Times New Roman', serif; font-size: 14px; line-height: 1.65;
+         color: #1e293b; background: #fff; max-width: 860px; margin: 0 auto; padding: 32px 24px; }
+  h1 { font-size: 22px; font-weight: bold; margin-bottom: 4px; }
+  h2 { font-size: 16px; font-weight: bold; margin: 28px 0 10px;
+       padding-bottom: 4px; border-bottom: 1px solid #e2e8f0; }
+  h3 { font-size: 14px; font-weight: bold; margin: 16px 0 6px; }
+  p  { margin-bottom: 8px; }
+  .meta { font-size: 12px; color: #64748b; font-family: sans-serif; margin-bottom: 32px; }
+  section { margin-bottom: 28px; }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; font-family: sans-serif; }
+  th { background: #f1f5f9; text-align: left; padding: 7px 10px; font-weight: 600; border: 1px solid #e2e8f0; }
+  td { padding: 6px 10px; border: 1px solid #e2e8f0; vertical-align: top; }
+  tr:nth-child(even) td { background: #f8fafc; }
+  .badge { display: inline-block; padding: 2px 8px; border-radius: 9999px;
+           font-size: 11px; font-weight: 600; font-family: sans-serif; }
+  .badge-met        { background: #dcfce7; color: #166534; }
+  .badge-violated   { background: #fee2e2; color: #991b1b; }
+  .badge-marginal   { background: #fef3c7; color: #92400e; }
+  .badge-untestable { background: #f1f5f9; color: #475569; }
+  .badge-critical   { background: #fee2e2; color: #991b1b; }
+  .badge-warning    { background: #fef3c7; color: #92400e; }
+  .badge-info       { background: #dbeafe; color: #1e40af; }
+  .result-box { background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px;
+                padding: 18px 22px; margin-bottom: 16px; }
+  .result-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 16px; }
+  .stat-label { font-size: 11px; color: #64748b; font-family: sans-serif; text-transform: uppercase; letter-spacing: .04em; }
+  .stat-value { font-size: 22px; font-weight: bold; font-family: sans-serif; }
+  .significant   { color: #166534; }
+  .insignificant { color: #475569; }
+  .summary-box { background: #eef2ff; border-left: 4px solid #4f46e5; padding: 14px 18px; border-radius: 4px; font-style: italic; }
+  .methods-box { background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 6px; padding: 14px 18px; font-family: sans-serif; font-size: 13px; }
+  .plot-wrap { margin: 12px 0; }
+  @media print {
+    body { max-width: 100%; padding: 16px; }
+    .no-print { display: none; }
+  }
+</style>
+</head>
+<body>
+
+<h1>Hypothesis Testing Agent — Analysis Report</h1>
+<p class="meta">
+  Session: {{ session_id[:8] }}… &nbsp;|&nbsp;
+  Generated: {{ generated_at }} &nbsp;|&nbsp;
+  <span class="no-print">Print this page to save as PDF</span>
+</p>
+
+<!-- DATA PROFILE -->
+<section>
+  <h2>Data Profile</h2>
+  <table>
+    <tr><th>Variable</th><th>Type</th><th>N</th><th>Missing</th><th>Mean</th><th>Std</th><th>Normal?</th></tr>
+    {% for v in report.data_profile.variables %}
+    <tr>
+      <td>{{ v.name }}</td>
+      <td>{{ v.variable_type }}</td>
+      <td>{{ v.n_observations }}</td>
+      <td>{{ v.n_missing }}</td>
+      <td>{{ "%.2f"|format(v.distribution_stats.mean) if v.distribution_stats else "—" }}</td>
+      <td>{{ "%.2f"|format(v.distribution_stats.std)  if v.distribution_stats else "—" }}</td>
+      <td>{{ v.normality.is_normal if v.normality else "—" }}</td>
+    </tr>
+    {% endfor %}
+  </table>
+  {% for note in report.data_profile.notes %}
+  <p style="font-size:12px;color:#92400e;margin-top:6px;">⚠ {{ note }}</p>
+  {% endfor %}
+</section>
+
+<!-- STUDY DESIGN -->
+<section>
+  <h2>Study Design</h2>
+  <table>
+    <tr><th>Design type</th><td>{{ report.study_design.design_type }}</td>
+        <th>Measurement</th><td>{{ report.study_design.measurement_type }}</td>
+        <th>Randomised</th><td>{{ "Yes" if report.study_design.is_randomized else "No" }}</td></tr>
+  </table>
+  {% if report.study_design.confounders %}
+  <h3>Confounders identified</h3>
+  <table>
+    <tr><th>Name</th><th>Role</th><th>Measured</th><th>Adjustment recommended</th><th>Rationale</th></tr>
+    {% for c in report.study_design.confounders %}
+    <tr><td>{{ c.name }}</td><td>{{ c.role }}</td>
+        <td>{{ "Yes" if c.is_measured else "No" }}</td>
+        <td>{{ "Yes" if c.adjustment_recommended else "No" }}</td>
+        <td>{{ c.rationale }}</td></tr>
+    {% endfor %}
+  </table>
+  {% endif %}
+</section>
+
+<!-- PRIMARY RESULT -->
+<section>
+  <h2>Statistical Result — {{ report.test_result.test_used | replace("_", " ") | title }}</h2>
+  <div class="result-box">
+    <div class="result-grid">
+      <div>
+        <div class="stat-label">Statistic</div>
+        <div class="stat-value">{{ "%.3f"|format(report.test_result.statistic) }}</div>
+      </div>
+      {% if report.test_result.degrees_of_freedom is not none %}
+      <div>
+        <div class="stat-label">df</div>
+        <div class="stat-value">{{ "%.1f"|format(report.test_result.degrees_of_freedom) }}</div>
+      </div>
+      {% endif %}
+      <div>
+        <div class="stat-label">p-value</div>
+        <div class="stat-value {{ 'significant' if report.test_result.is_significant else 'insignificant' }}">
+          {{ "< 0.001" if report.test_result.p_value < 0.001 else "%.3f"|format(report.test_result.p_value) }}
+        </div>
+      </div>
+      <div>
+        <div class="stat-label">95% CI</div>
+        <div class="stat-value" style="font-size:16px;">
+          [{{ "%.2f"|format(report.test_result.confidence_interval[0]) }},
+           {{ "%.2f"|format(report.test_result.confidence_interval[1]) }}]
+        </div>
+      </div>
+    </div>
+    <p style="margin-top:12px;font-family:sans-serif;font-size:13px;">
+      <strong>{{ "✓ Statistically significant" if report.test_result.is_significant else "✗ Not statistically significant" }}</strong>
+      at α = .05
+    </p>
+  </div>
+
+  <h3>Effect Size</h3>
+  <p style="font-family:sans-serif;">
+    <strong>{{ report.test_result.effect_size.measure_name }}</strong> =
+    {{ "%.3f"|format(report.test_result.effect_size.value) }}
+    ({{ report.test_result.effect_size.interpretation }}) &nbsp;
+    95% CI [{{ "%.2f"|format(report.test_result.effect_size.ci_lower) }},
+             {{ "%.2f"|format(report.test_result.effect_size.ci_upper) }}]
+  </p>
+
+  {% for note in report.test_result.notes %}
+  <p style="font-size:12px;color:#475569;font-family:sans-serif;">{{ note }}</p>
+  {% endfor %}
+</section>
+
+<!-- ASSUMPTION CHECKS -->
+<section>
+  <h2>Assumption Checks</h2>
+  <table>
+    <tr><th>Assumption</th><th>Status</th><th>Test used</th><th>Statistic</th><th>p-value</th><th>Note</th></tr>
+    {% for ac in report.test_result.assumption_checks %}
+    <tr>
+      <td>{{ ac.assumption_name }}</td>
+      <td><span class="badge badge-{{ ac.status | lower }}">{{ ac.status }}</span></td>
+      <td>{{ ac.test_used or "—" }}</td>
+      <td>{{ "%.3f"|format(ac.get('statistic')) if ac.get('statistic') is not none else "—" }}</td>
+      <td>{{ "%.3f"|format(ac.get('p_value'))  if ac.get('p_value')  is not none else "—" }}</td>
+      <td>{{ ac.note }}</td>
+    </tr>
+    {% endfor %}
+  </table>
+</section>
+
+<!-- CAVEATS -->
+{% if report.caveats %}
+<section>
+  <h2>Caveats</h2>
+  {% for c in report.caveats %}
+  <p style="margin-bottom:8px;">
+    <span class="badge badge-{{ c.severity | lower }}">{{ c.severity }}</span>
+    <strong style="margin-left:6px;">{{ c.message }}</strong>
+  </p>
+  <p style="font-size:13px;color:#475569;margin-left:4px;margin-bottom:14px;">{{ c.recommendation }}</p>
+  {% endfor %}
+</section>
+{% endif %}
+
+<!-- PLOTS -->
+{% if report.plots %}
+<section>
+  <h2>Plots</h2>
+  {% for plot in report.plots %}
+  <div class="plot-wrap">
+    <h3>{{ plot.title }}</h3>
+    <div id="plot-{{ loop.index }}" style="width:100%;height:320px;"></div>
+    <script>
+      Plotly.newPlot(
+        'plot-{{ loop.index }}',
+        {{ plot.plotly_json.data | tojson }},
+        {{ plot.plotly_json.layout | tojson }},
+        {responsive: true, displayModeBar: false}
+      );
+    </script>
+  </div>
+  {% endfor %}
+</section>
+{% endif %}
+
+<!-- PLAIN-LANGUAGE SUMMARY -->
+<section>
+  <h2>Plain-Language Summary</h2>
+  <div class="summary-box">{{ report.plain_language_summary }}</div>
+</section>
+
+<!-- METHODS -->
+<section>
+  <h2>Methods</h2>
+  <div class="methods-box">{{ report.methods_text }}</div>
+</section>
+
+<p style="font-size:11px;color:#94a3b8;margin-top:32px;font-family:sans-serif;text-align:center;">
+  Generated by Hypothesis Testing Agent (HTA) v0.1.0
+</p>
+</body>
+</html>
