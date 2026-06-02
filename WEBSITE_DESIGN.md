@@ -1,7 +1,7 @@
 # HTA Website Design Specification
 
-**Version:** 0.1  
-**Date:** 2026-06-01  
+**Version:** 0.2  
+**Date:** 2026-06-02  
 **Status:** Design — ready for review before implementation  
 **Scope:** Local-first development; cloud-ready architecture
 
@@ -32,6 +32,7 @@
 | Authentication | None (v1) | Session identified by UUID only; stored in browser `localStorage` |
 | Data storage | Server-side, persistent | Sessions stored as files; 7-day TTL with background cleanup |
 | Deployment | Local first, cloud later | Storage and config abstracted behind interfaces from day one |
+| Report export | HTML (single file) | No PDF renderer needed; browser print-to-PDF available; no system deps |
 
 ---
 
@@ -83,7 +84,9 @@ Better_Testing_Agent/
 │   │   │   ├── local.py        # LocalStorage (dev)
 │   │   │   └── s3.py           # S3Storage (cloud — stub for now)
 │   │   ├── plots.py            # PlotSpec → Plotly JSON conversion
-│   │   ├── pdf.py              # Report → PDF via WeasyPrint
+│   │   ├── export.py           # Report → self-contained HTML via Jinja2
+│   │   ├── templates/
+│   │   │   └── report.html.j2  # Jinja2 report template (inline CSS + Plotly)
 │   │   └── schemas.py          # Pydantic request/response schemas for the API
 │   │
 │   ├── frontend/
@@ -296,17 +299,11 @@ Returns whatever is currently available for a session — used for restoring sta
 
 ---
 
-#### `GET /api/sessions/{id}/export/pdf`
-Renders the report to PDF via WeasyPrint and streams the file.
+#### `GET /api/sessions/{id}/export/html`
+Renders the report to a self-contained HTML file via Jinja2 and streams it as a download.
+Plotly charts are embedded as inline JSON. No system dependencies.
 
-**Response:** `Content-Type: application/pdf`
-
----
-
-#### `GET /api/sessions/{id}/export/markdown`
-Renders the report to a Markdown string and streams the file.
-
-**Response:** `Content-Type: text/markdown`
+**Response:** `Content-Type: text/html; charset=utf-8`, `Content-Disposition: attachment; filename="hta_report_{session_id}.html"`
 
 ---
 
@@ -455,7 +452,7 @@ See §6 wireframe below. Replaces the wizard content entirely.
 │                               │  │  │  Welch's t-test was used…"   │  │
 │                               │  │  └──────────────────────────────┘  │
 │                               │  │                                     │
-│                               │  │  [⬇ Download PDF] [⬇ Download MD] │
+│                               │  │  [⬇ Download Report (HTML)]  [Copy methods text] │
 └───────────────────────────────┘  └─────────────────────────────────────┘
 ```
 
@@ -536,57 +533,79 @@ This means:
 
 ## 9. Export and report download
 
-### Markdown export
+### HTML export (primary download format)
 
-A `render_markdown(report: Report) -> str` function in `web/backend/pdf.py` produces:
+`render_html(report: Report, session_id: str) -> str` in `web/backend/export.py` produces a
+**single self-contained HTML file** — all CSS is inline, all plot data is embedded as Plotly
+JSON, and no external resources are fetched. The file can be:
+- Opened offline in any browser.
+- Printed to PDF via the browser's built-in print dialog (File → Print → Save as PDF).
+- Archived as a reproducible record of the analysis.
 
-```markdown
-# HTA Analysis Report
-**Date:** 2026-06-01  **Session:** a3f2…
+**Template structure** (`web/backend/templates/report.html.j2` — Jinja2):
 
-## Data Profile
-…
+```
+<html>
+  <head>
+    <style>  /* inline academic CSS — serif font, clean table styles, status colours */  </style>
+    <script src="https://cdn.plot.ly/plotly-2.x.x.min.js"></script>
+  </head>
+  <body>
+    <h1>HTA Analysis Report</h1>
+    <p>Date: {{ date }}  |  Session: {{ session_id }}</p>
 
-## Study Design
-…
+    <section id="data-profile"> … </section>
+    <section id="study-design"> … </section>
 
-## Statistical Test: Welch's t-test
-**Statistic:** t = 3.14   **df** = 98   **p = 0.002** ✓ Significant
+    <section id="result">
+      <h2>Statistical Test: {{ result.test_used }}</h2>
+      <table> statistic / df / p-value / significance </table>
+    </section>
 
-## Effect Size
-Cohen's d = 0.52 (medium), 95% CI [0.21, 0.83]
+    <section id="effect-size"> … </section>
+    <section id="assumptions"> … coloured table … </section>
+    <section id="caveats"> … severity-labelled list … </section>
 
-## Assumption Checks
-| Assumption | Status | Note |
-|---|---|---|
-| Normality | ✅ Met | Shapiro-Wilk p = 0.31 |
-…
+    <section id="plots">
+      {% for plot in plots %}
+      <div id="plot-{{ loop.index }}"></div>
+      <script>
+        Plotly.newPlot('plot-{{ loop.index }}', {{ plot.plotly_json | tojson }});
+      </script>
+      {% endfor %}
+    </section>
 
-## Caveats
-…
+    <section id="plain-summary">
+      <blockquote>{{ report.plain_language_summary }}</blockquote>
+    </section>
 
-## Plain-Language Summary
-…
-
-## Methods
-An independent-samples Welch's t-test was used…
+    <section id="methods">
+      <h2>Methods</h2>
+      <p>{{ report.methods_text }}</p>
+    </section>
+  </body>
+</html>
 ```
 
-Streamed as `Content-Disposition: attachment; filename="hta_report_{session_id}.md"`.
+Served as:
+```
+Content-Type: text/html; charset=utf-8
+Content-Disposition: attachment; filename="hta_report_{session_id}.html"
+```
 
-### PDF export
+**Dependencies:** Only `jinja2` (already a FastAPI transitive dependency — no new packages needed).
 
-`render_pdf(report: Report) -> bytes` in `web/backend/pdf.py`:
-1. Calls `render_markdown` and converts to HTML via `markdown` library.
-2. Wraps in an HTML template with academic styling (clean serif font, no sidebar).
-3. Converts to PDF via **WeasyPrint**.
-4. Returns bytes streamed with `Content-Type: application/pdf`.
+### Export button behaviour
 
-WeasyPrint system dependencies (Cairo, Pango) are included in `Dockerfile.backend`.
+The `ExportBar` component shows a single **"Download Report (HTML)"** button. Clicking it opens
+`GET /api/sessions/{id}/export/html` in a new tab — the browser downloads the file directly.
+A secondary **"Copy methods text"** button copies `report.methods_text` to clipboard via
+`navigator.clipboard.writeText()` — no server call.
 
-### Copy-to-clipboard (methods text)
-
-The `MethodsText` component has a `[Copy]` button using `navigator.clipboard.writeText()`. No server call — the methods text is already in the report JSON.
+The results view export bar:
+```
+[⬇ Download Report (HTML)]   [Copy methods text]
+```
 
 ---
 
@@ -662,11 +681,12 @@ web = [
     "uvicorn[standard]>=0.29.0",
     "python-multipart>=0.0.9",    # file upload
     "aiofiles>=23.0.0",           # async file I/O
-    "weasyprint>=61.0",           # PDF export
-    "markdown>=3.6",              # Markdown → HTML for PDF
+    "jinja2>=3.1.0",              # HTML report templating (transitive FastAPI dep — explicit for clarity)
     "boto3>=1.34.0",              # S3 (stub for now, used in cloud)
 ]
 ```
+
+No system-level dependencies (no Cairo, Pango, or LaTeX). The Docker image stays lean.
 
 ---
 
@@ -702,8 +722,8 @@ The website is built in three phases, each independently testable.
 - [ ] `web/backend/api/sessions.py` — upload, PATCH variables, GET session
 - [ ] `web/backend/api/run.py` — SSE pipeline execution (dry-run)
 - [ ] `web/backend/plots.py` — `PlotSpec → Plotly JSON`
-- [ ] `web/backend/pdf.py` — Markdown and PDF rendering
-- [ ] `web/backend/api/export.py` — PDF and Markdown download
+- [ ] `web/backend/export.py` + `templates/report.html.j2` — self-contained HTML report
+- [ ] `web/backend/api/export.py` — HTML download endpoint
 - [ ] `web/docker-compose.yml` + Dockerfiles
 - [ ] Manual test: `curl` through the full upload → run → export flow
 
@@ -746,4 +766,4 @@ The website is built in three phases, each independently testable.
 
 ---
 
-*Last updated: 2026-06-01. Approved decisions in §1; ready for Phase W1 implementation.*
+*Last updated: 2026-06-02. v0.2: export format changed from PDF+Markdown to self-contained HTML (Jinja2 template, no system deps). v0.1: initial design.*
