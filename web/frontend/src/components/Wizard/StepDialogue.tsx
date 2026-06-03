@@ -1,148 +1,246 @@
-import { useEffect, useRef, useState } from 'react'
-import { Send, ArrowRight } from 'lucide-react'
-import type { DialogueMessage, StudyDesign } from '../../types/api'
+import { useState } from 'react'
+import { ArrowRight, X, Plus } from 'lucide-react'
+import type { StudyDesign, StudyDesignType, MeasurementType, Confounder } from '../../types/api'
 
 interface Props {
-  messages: DialogueMessage[]
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  messages: any[]            // kept for interface compatibility
   studyDesign: StudyDesign | null
-  onSend: (msg: string) => Promise<void>
+  onSend: (msg: string) => Promise<void>   // kept for interface compatibility
   onConfirm: (design: StudyDesign) => void
 }
 
-const DESIGN_TYPE_LABELS: Record<string, string> = {
-  EXPERIMENTAL: 'Experimental', OBSERVATIONAL: 'Observational', QUASI_EXPERIMENTAL: 'Quasi-experimental',
+// ── Option card ────────────────────────────────────────────────────────────────
+
+function OptionCard({
+  label, description, selected, onClick,
+}: {
+  label: string
+  description: string
+  selected: boolean
+  onClick: () => void
+}) {
+  return (
+    <button
+      onClick={onClick}
+      className={`w-full text-left px-4 py-3.5 rounded-xl border-2 transition-all ${
+        selected
+          ? 'border-brand bg-indigo-50 shadow-sm'
+          : 'border-slate-200 bg-white hover:border-slate-300 hover:bg-slate-50'
+      }`}
+    >
+      <p className={`text-sm font-semibold ${selected ? 'text-brand' : 'text-slate-800'}`}>{label}</p>
+      <p className="text-xs text-slate-500 mt-0.5 leading-snug">{description}</p>
+    </button>
+  )
 }
-const MEASUREMENT_LABELS: Record<string, string> = {
-  BETWEEN_SUBJECTS: 'Between-subjects', WITHIN_SUBJECTS: 'Within-subjects', MIXED: 'Mixed',
+
+// ── Question block ─────────────────────────────────────────────────────────────
+
+function Question({ number, label, children, visible }: {
+  number: number
+  label: string
+  children: React.ReactNode
+  visible: boolean
+}) {
+  if (!visible) return null
+  return (
+    <div className="space-y-3 animate-[fadeIn_0.2s_ease-in]">
+      <div className="flex items-center gap-2">
+        <span className="w-6 h-6 rounded-full bg-brand text-white text-xs font-bold flex items-center justify-center shrink-0">
+          {number}
+        </span>
+        <p className="text-sm font-semibold text-slate-700">{label}</p>
+      </div>
+      <div className="space-y-2 pl-8">{children}</div>
+    </div>
+  )
 }
 
-export default function StepDialogue({ messages, studyDesign, onSend, onConfirm }: Props) {
-  const [input, setInput] = useState('')
-  const [sending, setSending] = useState(false)
-  const bottomRef = useRef<HTMLDivElement>(null)
+// ── Main component ─────────────────────────────────────────────────────────────
 
-  useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
-  }, [messages])
+type RelationshipForm = 'linear' | 'monotone' | 'nonlinear' | 'unknown'
 
-  // Auto-send opening message
-  useEffect(() => {
-    if (messages.length === 0) {
-      setSending(true)
-      onSend('__init__').finally(() => setSending(false))
+export default function StepDialogue({ studyDesign, onConfirm }: Props) {
+  const [designType, setDesignType]         = useState<StudyDesignType | null>(null)
+  const [measurementType, setMeasurementType] = useState<MeasurementType | null>(null)
+  const [isRandomized, setIsRandomized]     = useState<boolean | null>(null)
+  const [relationship, setRelationship]     = useState<RelationshipForm | null>(null)
+  const [confounderInput, setConfounderInput] = useState('')
+  const [confounders, setConfounders]       = useState<string[]>([])
+
+  // Progressive reveal: each step unlocks the next
+  const showStep2 = designType !== null
+  const showStep3 = showStep2 && measurementType !== null
+  const showStep4 = showStep3 && isRandomized !== null
+  const showStep5 = showStep4 && relationship !== null
+  const canConfirm = showStep5
+
+  const addConfounder = () => {
+    const name = confounderInput.trim()
+    if (name && !confounders.includes(name)) {
+      setConfounders(prev => [...prev, name])
     }
-  }, []) // eslint-disable-line react-hooks/exhaustive-deps
+    setConfounderInput('')
+  }
 
-  const handleSend = async () => {
-    const msg = input.trim()
-    if (!msg || sending) return
-    setInput('')
-    setSending(true)
-    await onSend(msg)
-    setSending(false)
+  const buildDesign = (): StudyDesign => {
+    const confounderObjects: Confounder[] = confounders.map(name => ({
+      name,
+      role: 'potential_confounder',
+      is_measured: false,
+      adjustment_recommended: true,
+      rationale: 'User-identified confounder',
+    }))
+    const notes: string[] = []
+    if (relationship) notes.push(`Expected relationship form: ${relationship}`)
+    return {
+      design_type: designType!,
+      measurement_type: measurementType!,
+      is_randomized: isRandomized!,
+      confounders: confounderObjects,
+      notes,
+    }
+  }
+
+  if (studyDesign) {
+    // Already confirmed — show read-only summary
+    return (
+      <div className="max-w-xl mx-auto">
+        <h2 className="text-2xl font-bold text-slate-900 mb-2">Study design</h2>
+        <div className="bg-white rounded-2xl border border-indigo-200 shadow-sm p-6">
+          <p className="text-xs font-semibold text-brand uppercase tracking-wide mb-4">Design captured</p>
+          <dl className="space-y-3 text-sm">
+            {[
+              ['Design type', studyDesign.design_type.replace('_', ' ')],
+              ['Measurement', studyDesign.measurement_type.replace('_', ' ')],
+              ['Randomised', studyDesign.is_randomized ? 'Yes' : 'No'],
+              studyDesign.confounders.length > 0
+                ? ['Confounders', studyDesign.confounders.map(c => c.name).join(', ')]
+                : null,
+              studyDesign.notes.length > 0
+                ? ['Notes', studyDesign.notes.join('; ')]
+                : null,
+            ].filter((x): x is [string, string] => x !== null).map(([dt, dd]) => (
+              <div key={dt as string}>
+                <dt className="text-slate-500 text-xs mb-0.5">{dt as string}</dt>
+                <dd className="font-medium text-slate-800 capitalize">{(dd as string).toLowerCase()}</dd>
+              </div>
+            ))}
+          </dl>
+        </div>
+      </div>
+    )
   }
 
   return (
-    <div className="max-w-5xl mx-auto">
-      <h2 className="text-2xl font-bold text-slate-900 mb-2">Study design</h2>
-      <p className="text-slate-500 mb-6">Answer a few questions so HTA can select the right test for your design.</p>
+    <div className="max-w-xl mx-auto">
+      <h2 className="text-2xl font-bold text-slate-900 mb-1">Study design</h2>
+      <p className="text-slate-500 mb-8 text-sm">Answer a few questions so HTA can select the right statistical test.</p>
 
-      <div className="grid lg:grid-cols-5 gap-6">
-        {/* Chat panel */}
-        <div className="lg:col-span-3 flex flex-col bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden" style={{ minHeight: 480 }}>
-          <div className="px-4 py-3 border-b border-slate-100 bg-slate-50">
-            <p className="text-xs font-semibold text-slate-500 uppercase tracking-wide">Conversation</p>
-          </div>
+      <div className="space-y-8">
 
-          <div className="flex-1 overflow-y-auto p-4 space-y-4">
-            {messages.map((m, i) => (
-              <div key={i} className={`flex ${m.role === 'user' ? 'justify-end' : 'justify-start'}`}>
-                <div className={`max-w-[85%] px-4 py-3 rounded-2xl text-sm leading-relaxed whitespace-pre-wrap ${
-                  m.role === 'user'
-                    ? 'bg-brand text-white rounded-br-md'
-                    : 'bg-slate-100 text-slate-800 rounded-bl-md'
-                }`}>
-                  {m.content}
-                </div>
-              </div>
-            ))}
-            {sending && messages[messages.length - 1]?.role === 'user' && (
-              <div className="flex justify-start">
-                <div className="bg-slate-100 px-4 py-3 rounded-2xl rounded-bl-md">
-                  <span className="flex gap-1">
-                    {[0,1,2].map(i => (
-                      <span key={i} className="w-2 h-2 bg-slate-400 rounded-full animate-bounce" style={{ animationDelay: `${i * 0.15}s` }} />
-                    ))}
-                  </span>
-                </div>
-              </div>
-            )}
-            <div ref={bottomRef} />
-          </div>
+        {/* Q1 — Study type */}
+        <Question number={1} label="How was the study conducted?" visible>
+          {(
+            [
+              ['EXPERIMENTAL',      'Experimental',       'Researchers assigned treatments or exposures to participants'],
+              ['OBSERVATIONAL',     'Observational',      'Researchers observed naturally occurring variables, no assignment'],
+              ['QUASI_EXPERIMENTAL','Quasi-experimental', 'Treatment-like groups, but assignment was not fully random'],
+            ] as [StudyDesignType, string, string][]
+          ).map(([val, label, desc]) => (
+            <OptionCard key={val} label={label} description={desc}
+              selected={designType === val} onClick={() => setDesignType(val)} />
+          ))}
+        </Question>
 
-          <div className="p-3 border-t border-slate-100 flex gap-2">
+        {/* Q2 — Measurement structure */}
+        <Question number={2} label="Are the observations independent?" visible={showStep2}>
+          {(
+            [
+              ['BETWEEN_SUBJECTS', 'Independent',         'Each row is a different participant or unit — no pairing or clustering'],
+              ['WITHIN_SUBJECTS',  'Repeated / paired',   'Same participant measured multiple times, or matched pairs'],
+              ['MIXED',            'Mixed / clustered',   'Some grouping structure: nested data, split-plot, or partial pairing'],
+            ] as [MeasurementType, string, string][]
+          ).map(([val, label, desc]) => (
+            <OptionCard key={val} label={label} description={desc}
+              selected={measurementType === val} onClick={() => setMeasurementType(val)} />
+          ))}
+        </Question>
+
+        {/* Q3 — Randomization */}
+        <Question number={3} label="Was randomization used?" visible={showStep3}>
+          {(
+            [
+              [true,  'Yes', 'Participants were randomly assigned to conditions'],
+              [false, 'No',  'Assignment was based on availability, self-selection, or other criteria'],
+            ] as [boolean, string, string][]
+          ).map(([val, label, desc]) => (
+            <OptionCard key={String(val)} label={label} description={desc}
+              selected={isRandomized === val} onClick={() => setIsRandomized(val)} />
+          ))}
+        </Question>
+
+        {/* Q4 — Relationship form */}
+        <Question number={4} label="What relationship do you expect between variables?" visible={showStep4}>
+          {(
+            [
+              ['linear',    'Linear',           'A straight-line relationship — equal change in Y per unit X'],
+              ['monotone',  'Monotone',          'Consistently increasing or decreasing, but not necessarily straight'],
+              ['nonlinear', 'Nonlinear / complex','U-shaped, threshold effects, or other non-monotone patterns'],
+              ['unknown',   'Unknown',           "Not sure — let HTA decide based on the data"],
+            ] as [RelationshipForm, string, string][]
+          ).map(([val, label, desc]) => (
+            <OptionCard key={val} label={label} description={desc}
+              selected={relationship === val} onClick={() => setRelationship(val)} />
+          ))}
+        </Question>
+
+        {/* Q5 — Confounders */}
+        <Question number={5} label="Any known confounders to note? (optional)" visible={showStep5}>
+          <p className="text-xs text-slate-400 -mt-1 mb-2">
+            e.g. age, sex, baseline severity, site — type one at a time and press Enter or +
+          </p>
+          <div className="flex gap-2">
             <input
-              value={input}
-              onChange={e => setInput(e.target.value)}
-              onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSend() } }}
-              disabled={sending || !!studyDesign}
-              placeholder={studyDesign ? 'Design captured — confirm on the right' : 'Type your reply…'}
-              className="flex-1 border border-slate-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand disabled:bg-slate-50"
+              value={confounderInput}
+              onChange={e => setConfounderInput(e.target.value)}
+              onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); addConfounder() } }}
+              placeholder="Confounder name…"
+              className="flex-1 border border-slate-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand"
             />
             <button
-              onClick={handleSend}
-              disabled={sending || !input.trim() || !!studyDesign}
-              className="p-2.5 bg-brand text-white rounded-xl hover:bg-brand-dark transition-colors disabled:opacity-40"
+              onClick={addConfounder}
+              disabled={!confounderInput.trim()}
+              className="p-2.5 bg-slate-100 text-slate-600 rounded-xl hover:bg-slate-200 transition-colors disabled:opacity-40"
             >
-              <Send size={16} />
+              <Plus size={16} />
             </button>
           </div>
-        </div>
-
-        {/* Design summary card */}
-        <div className="lg:col-span-2">
-          {studyDesign ? (
-            <div className="bg-white rounded-2xl border border-indigo-200 shadow-sm p-5">
-              <p className="text-xs font-semibold text-brand uppercase tracking-wide mb-4">Study design captured</p>
-              <dl className="space-y-3 text-sm">
-                <div>
-                  <dt className="text-slate-500 text-xs mb-0.5">Design type</dt>
-                  <dd className="font-medium text-slate-800">{DESIGN_TYPE_LABELS[studyDesign.design_type]}</dd>
-                </div>
-                <div>
-                  <dt className="text-slate-500 text-xs mb-0.5">Measurement</dt>
-                  <dd className="font-medium text-slate-800">{MEASUREMENT_LABELS[studyDesign.measurement_type]}</dd>
-                </div>
-                <div>
-                  <dt className="text-slate-500 text-xs mb-0.5">Randomised</dt>
-                  <dd className="font-medium text-slate-800">{studyDesign.is_randomized ? 'Yes' : 'No'}</dd>
-                </div>
-                {studyDesign.confounders.length > 0 && (
-                  <div>
-                    <dt className="text-slate-500 text-xs mb-0.5">Confounders identified</dt>
-                    <dd className="font-medium text-slate-800">{studyDesign.confounders.map(c => c.name).join(', ')}</dd>
-                  </div>
-                )}
-                {studyDesign.notes.length > 0 && (
-                  <div>
-                    <dt className="text-slate-500 text-xs mb-0.5">Notes</dt>
-                    <dd className="text-slate-600">{studyDesign.notes.join('; ')}</dd>
-                  </div>
-                )}
-              </dl>
-              <button
-                onClick={() => onConfirm(studyDesign)}
-                className="mt-6 w-full flex items-center justify-center gap-2 px-4 py-2.5 bg-brand text-white rounded-xl text-sm font-medium hover:bg-brand-dark transition-colors"
-              >
-                Confirm design <ArrowRight size={15} />
-              </button>
-            </div>
-          ) : (
-            <div className="bg-slate-50 rounded-2xl border border-slate-200 p-5 text-center text-slate-400 text-sm" style={{ minHeight: 200 }}>
-              <p className="mt-8">The study design summary will appear here once the conversation is complete.</p>
+          {confounders.length > 0 && (
+            <div className="flex flex-wrap gap-2 mt-2">
+              {confounders.map(c => (
+                <span key={c} className="flex items-center gap-1 px-3 py-1 bg-indigo-50 text-brand text-xs font-medium rounded-full border border-indigo-200">
+                  {c}
+                  <button onClick={() => setConfounders(prev => prev.filter(x => x !== c))} className="hover:text-indigo-800">
+                    <X size={11} />
+                  </button>
+                </span>
+              ))}
             </div>
           )}
-        </div>
+        </Question>
+
+        {/* Confirm */}
+        {canConfirm && (
+          <button
+            onClick={() => onConfirm(buildDesign())}
+            className="w-full flex items-center justify-center gap-2 px-4 py-3 bg-brand text-white rounded-xl text-sm font-semibold hover:bg-brand-dark transition-colors animate-[fadeIn_0.2s_ease-in]"
+          >
+            Confirm design <ArrowRight size={15} />
+          </button>
+        )}
+
       </div>
     </div>
   )
