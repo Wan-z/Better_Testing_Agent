@@ -119,6 +119,9 @@ async def _stream_live(session_id: str, history: list[dict[str, str]]) -> object
         store.set_status(session_id, "DESIGNED")
         yield _sse({"type": "done", "is_complete": True, "study_design": design})
     else:
+        if accumulated:
+            history.append({"role": "assistant", "content": accumulated})
+            store.write_json(session_id, "dialogue_history.json", history)
         yield _sse({"type": "done", "is_complete": False})
 
 

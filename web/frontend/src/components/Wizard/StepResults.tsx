@@ -4,6 +4,7 @@ import { RotateCcw } from 'lucide-react'
 
 interface Props {
   report: Report | null
+  sessionId: string | null
   progressMessage: string
   onReset: () => void
 }
@@ -11,7 +12,7 @@ interface Props {
 const STAGES = ['selecting_test', 'executing_test', 'generating_report']
 const STAGE_LABELS = ['Selecting test', 'Running test', 'Generating report']
 
-export default function StepResults({ report, progressMessage, onReset }: Props) {
+export default function StepResults({ report, sessionId, progressMessage, onReset }: Props) {
   if (!report) {
     const stageIdx = STAGES.findIndex(s => progressMessage.toLowerCase().includes(s.replace('_', '')))
     const active = stageIdx >= 0 ? stageIdx : 0
@@ -50,7 +51,7 @@ export default function StepResults({ report, progressMessage, onReset }: Props)
           <RotateCcw size={14} /> New analysis
         </button>
       </div>
-      <ResultsView report={report} />
+      <ResultsView report={report} sessionId={sessionId ?? ''} />
     </div>
   )
 }

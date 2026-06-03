@@ -3,9 +3,7 @@ import type {
   SessionStatus, VariableType, StudyDesign,
   Report, DialogueMessage, VariablesPayload,
 } from '../types/api'
-import {
-  mockUpload, mockSetVariables, mockDialogueTurn, mockRunAnalysis,
-} from '../api/mock'
+import { upload as apiUpload, setVariables as apiSetVariables, dialogueTurn, runAnalysis as apiRunAnalysis } from '../api/client'
 
 export interface SessionState {
   sessionId: string | null
@@ -45,7 +43,7 @@ export function useSession() {
   const upload = useCallback(async (file: File) => {
     update({ error: null })
     try {
-      const res = await mockUpload(file)
+      const res = await apiUpload(file)
       update({
         sessionId: res.session_id,
         status: res.status,
@@ -62,22 +60,24 @@ export function useSession() {
   // Step 2 — set variables and hypothesis
   const setVariables = useCallback(async (payload: VariablesPayload) => {
     if (!state.sessionId) return
-    await mockSetVariables(state.sessionId, payload)
+    await apiSetVariables(state.sessionId, payload)
     update({ variables: payload, step: 3 })
   }, [state.sessionId, update])
 
   // Step 3 — one dialogue turn (streamed)
   const sendMessage = useCallback(async (userMessage: string) => {
     if (!state.sessionId) return
-    update({
-      messages: [...state.messages, { role: 'user', content: userMessage }],
-    })
+
+    const isInit = userMessage === '__init__'
+    if (!isInit) {
+      update({ messages: [...state.messages, { role: 'user', content: userMessage }] })
+    }
 
     let assistantText = ''
     let finalDesign: StudyDesign | null = null
 
-    for await (const event of mockDialogueTurn(state.sessionId, userMessage, state.dialogueTurn)) {
-      if (event.type === 'token' && event.content) {
+    for await (const event of dialogueTurn(state.sessionId, userMessage)) {
+      if (event.type === 'token' && typeof event.content === 'string') {
         assistantText += event.content
         setState(s => {
           const msgs = [...s.messages]
@@ -90,7 +90,9 @@ export function useSession() {
           return { ...s, messages: msgs }
         })
       } else if (event.type === 'done') {
-        if (event.study_design) finalDesign = event.study_design
+        if (event.is_complete && event.study_design) {
+          finalDesign = event.study_design as StudyDesign
+        }
       }
     }
 
@@ -109,11 +111,11 @@ export function useSession() {
     if (!state.sessionId) return
     update({ step: 5, status: 'RUNNING', progressMessage: 'Starting analysis…' })
 
-    for await (const event of mockRunAnalysis(state.sessionId)) {
-      if (event.type === 'progress' && event.message) {
+    for await (const event of apiRunAnalysis(state.sessionId)) {
+      if (event.type === 'progress' && typeof event.message === 'string') {
         update({ progressMessage: event.message })
       } else if (event.type === 'result' && event.report) {
-        update({ report: event.report, status: 'COMPLETE', progressMessage: '' })
+        update({ report: event.report as Report, status: 'COMPLETE', progressMessage: '' })
       }
     }
   }, [state.sessionId, update])

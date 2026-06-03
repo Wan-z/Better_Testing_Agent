@@ -1,6 +1,7 @@
 import type { Report } from '../../types/api'
 import { AssumptionBadge, CaveatBadge, SignificanceBadge } from '../shared/Badge'
 import { CopyButton } from '../shared/CopyButton'
+import { exportHtmlUrl } from '../../api/client'
 import PlotViewer from './PlotViewer'
 
 const TEST_LABELS: Record<string, string> = {
@@ -17,9 +18,9 @@ function fmt(n: number, decimals = 3) {
   return n.toFixed(decimals)
 }
 
-interface Props { report: Report }
+interface Props { report: Report; sessionId: string }
 
-export default function ResultsView({ report }: Props) {
+export default function ResultsView({ report, sessionId }: Props) {
   const { test_result: tr, study_design: sd, data_profile: dp } = report
 
   return (
@@ -174,7 +175,9 @@ export default function ResultsView({ report }: Props) {
         {/* Export */}
         <div className="flex justify-end">
           <a
-            href={`/api/sessions/__mock__/export/html`}
+            href={exportHtmlUrl(sessionId)}
+            target="_blank"
+            rel="noreferrer"
             className="inline-flex items-center gap-2 px-5 py-2.5 bg-brand text-white rounded-xl text-sm font-medium hover:bg-brand-dark transition-colors"
           >
             ⬇ Download Report (HTML)

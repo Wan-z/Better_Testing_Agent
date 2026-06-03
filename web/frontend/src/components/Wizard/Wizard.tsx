@@ -75,6 +75,7 @@ export default function Wizard() {
         {state.step === 5 && (
           <StepResults
             report={state.report}
+            sessionId={state.sessionId}
             progressMessage={state.progressMessage}
             onReset={session.reset}
           />
