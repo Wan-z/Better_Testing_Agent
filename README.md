@@ -1,10 +1,21 @@
 # Hypothesis Testing Agent (HTA)
 
 An AI-powered statistical reasoning system that acts as a rigorous collaborator for researchers.
-It reasons about study design and causal structure before selecting and executing any statistical
-test, then produces a comprehensive report with effect sizes, power analysis, and caveats.
+HTA reasons about study design and causal structure before selecting and executing the right
+statistical test, then produces a comprehensive report with effect sizes, assumption checks,
+caveats, and a methods text ready to paste into a manuscript.
 
-## Architecture
+## How it works
+
+```
+Upload CSV → Select variables → Design dialogue (LLM) → Statistical test → Report
+```
+
+A conversational LLM elicits study design information (experimental vs observational,
+measurement type, confounders, relationship form). This drives test selection. The full
+pipeline streams results in real time and exports a self-contained HTML report.
+
+## Pipeline architecture
 
 ```
 DataProfiler → DesignDialogue → TestSelector → TestExecutor → Reporter
@@ -12,18 +23,30 @@ DataProfiler → DesignDialogue → TestSelector → TestExecutor → Reporter
 DataProfile    StudyDesign    StatisticalTest   TestResult    Report
 ```
 
-All modules communicate via the shared event bus (`src/hta/bus.py`) and the shared Pydantic
-models (`src/hta/models/`). No direct imports between modules.
+All modules share Pydantic models (`src/hta/models/`) as a lingua franca.
+
+## Supported tests
+
+| Test | Conditions |
+|------|-----------|
+| Welch's t-test | Continuous outcome, 2 independent groups (default) |
+| Mann–Whitney U | Non-normal / ordinal, 2 groups |
+| Paired t-test | Within-subjects, continuous |
+| Wilcoxon signed-rank | Within-subjects, non-normal |
+| One-way ANOVA | Continuous, ≥ 3 groups |
+| Kruskal–Wallis | Non-parametric, ≥ 3 groups |
+| Chi-squared | Categorical × categorical (expected ≥ 5) |
+| Fisher's exact | 2×2 contingency (expected < 5) |
+| McNemar | Paired binary |
+| Pearson correlation | Linear, bivariate continuous |
+| Spearman correlation | Monotone / ordinal |
+| MaxBET | Nonlinear independence (nonparametric) |
 
 ## Requirements
 
 - Python ≥ 3.11
-- Access to the shared secrets file at `~/.config/trading-agents/secrets.env`
-  (contains `AZURE_OPENAI_API_KEY`, `AZURE_OPENAI_BASE_URL`, `AZURE_OPENAI_DEPLOYMENT`)
-
-The LLM backend is **GPT-5.4 via Azure OpenAI** (UNC endpoint). Credentials are shared
-across the trading-agent suite and loaded automatically from the secrets file — no
-per-project `.env` setup is required.
+- Node.js ≥ 20 (web frontend only)
+- Azure OpenAI access (GPT-5.4 endpoint)
 
 ## Installation
 
@@ -31,26 +54,64 @@ per-project `.env` setup is required.
 git clone git@github.com:zhengwu/Better_Testing_Agent.git
 cd Better_Testing_Agent
 
-# Create and activate a virtual environment (conda recommended)
+# Conda environment (recommended)
 conda create -n hta python=3.11 && conda activate hta
 
-# Install the package with dev dependencies
+# Core + dev tools
 pip install -e ".[dev]"
+
+# Web backend (FastAPI, Jinja2, …)
+pip install -e ".[web]"
+
+# Frontend
+cd web/frontend && npm install
+```
+
+## Configuration
+
+Create a `.env` file in the project root:
+
+```bash
+AZURE_OPENAI_API_KEY=your_key_here
+AZURE_OPENAI_ENDPOINT=https://your-endpoint.openai.azure.com
+AZURE_OPENAI_DEPLOYMENT=gpt-5.4
+
+# Optional overrides
+HTA_DEFAULT_DRY_RUN=false   # true = use stub data, no API calls
+HTA_SESSION_TTL_DAYS=7
+HTA_LOG_LEVEL=INFO
+```
+
+`HTA_DEFAULT_DRY_RUN=true` runs the full pipeline with realistic stub data — no API key needed.
+
+## Running the web app
+
+```bash
+# Terminal 1 — FastAPI backend (port 8000)
+uvicorn web.backend.main:app --port 8000 --reload
+
+# Terminal 2 — Vite dev server (port 5173, proxies /api → backend)
+cd web/frontend && npm run dev
+```
+
+Open **http://localhost:5173** in your browser.
+
+To export a report: click **Download Report (HTML)** on the results page. The file is
+self-contained (inline CSS + Plotly CDN) and prints cleanly to PDF.
+
+## Docker (production)
+
+```bash
+cd web
+docker compose up --build
+# → frontend at :80, backend at :8000
 ```
 
 ## Running tests
 
 ```bash
-pytest                          # run all tests with coverage
-pytest tests/test_models.py -v  # run model tests only
-```
-
-## Running the CLI (dry-run, no API key needed)
-
-```bash
-hta run --dry-run
-hta run --data examples/data/bp.csv --hypothesis "Treatment reduces BP" \
-        --group group --outcome bp
+pytest                          # all tests with coverage
+pytest tests/test_models.py -v  # models only
 ```
 
 ## Code quality
@@ -64,18 +125,44 @@ mypy src/hta           # type checking
 
 ```
 src/hta/
-  models/     Shared Pydantic data models (lingua franca of the system)
-  bus.py      Pub/sub event bus
-  modules/    Processing modules (profiler, dialogue, selector, executor, reporter)
-  agent.py    Top-level orchestrator
-  cli.py      Typer CLI entry point
-tests/        pytest test suite
-examples/     Runnable example scripts
+  models/           Shared Pydantic data models
+  bus.py            Pub/sub event bus
+  modules/          DataProfiler, DesignDialogue, TestSelector, TestExecutor, Reporter
+  agent.py          Top-level orchestrator
+  cli.py            Typer CLI
+web/
+  backend/
+    api/            FastAPI routers (sessions, dialogue, run, export)
+    storage/        StorageBackend protocol + LocalStorage implementation
+    templates/      Jinja2 HTML report template
+    main.py         FastAPI app entry point
+  frontend/
+    src/
+      api/          client.ts — real fetch/SSE calls; mock.ts — stub data
+      components/   Wizard steps, Results view, Landing, About
+      hooks/        useSession — all session state + streaming logic
+      types/        TypeScript types mirroring Pydantic models
+  docker-compose.yml
+  Dockerfile.backend / Dockerfile.frontend
+tests/              pytest test suite
+TECHNICAL_REPORT.md Statistical methodology and design decisions
+IMPLEMENTATION_PLAN.md Step-by-step build guide
 ```
+
+## Design decisions
+
+Key choices are documented in [`TECHNICAL_REPORT.md`](TECHNICAL_REPORT.md):
+
+- **Welch's t-test as unconditional default** — no equal-variance pre-test
+- **Anderson-Darling at N > 2 000** (Shapiro-Wilk below that threshold)
+- **Normality as soft signal** — informs but does not gate test selection
+- **MaxBET** for nonlinear independence testing (BEAST deferred to v0.2)
+- **Always-on post-hoc** — Tukey HSD / Dunn with Holm correction
+- **Effect sizes with bootstrap CIs** on every result
 
 ## Contributing
 
-1. All public functions must have type annotations and docstrings.
+1. All public functions must have type annotations.
 2. Every module gets a corresponding `tests/test_<module>.py`.
 3. Run `ruff check` and `mypy` before opening a PR.
-4. Statistical decision points are documented in `STATISTICIAN_REVIEW.md`.
+4. Statistical decision points go in `TECHNICAL_REPORT.md`.
