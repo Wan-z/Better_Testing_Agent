@@ -84,7 +84,7 @@ async def _stream_live(session_id: str, history: list[dict[str, str]]) -> object
         messages=[{"role": "system", "content": SYSTEM}] + history,  # type: ignore[arg-type]
         tools=TOOLS,  # type: ignore[arg-type]
         stream=True,
-        max_tokens=512,
+        max_completion_tokens=512,
     )
 
     async for chunk in stream:
