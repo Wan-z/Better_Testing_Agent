@@ -11,10 +11,11 @@ from pydantic import BaseModel, Field
 class StatisticalTest(str, Enum):
     """Enumeration of all statistical tests the agent can select and execute."""
 
-    INDEPENDENT_T = "INDEPENDENT_T"
+    INDEPENDENT_T = "INDEPENDENT_T"  # equal-variance Student's t — explicit override only
     PAIRED_T = "PAIRED_T"
-    WELCH_T = "WELCH_T"
-    ONE_WAY_ANOVA = "ONE_WAY_ANOVA"
+    WELCH_T = "WELCH_T"  # default for 2-group between-subjects continuous (no variance pretest)
+    ONE_WAY_ANOVA = "ONE_WAY_ANOVA"  # pooled-variance ANOVA — explicit override only
+    WELCH_ANOVA = "WELCH_ANOVA"  # default for 3+ group between-subjects continuous
     KRUSKAL_WALLIS = "KRUSKAL_WALLIS"
     MANN_WHITNEY_U = "MANN_WHITNEY_U"
     WILCOXON_SIGNED_RANK = "WILCOXON_SIGNED_RANK"
@@ -23,6 +24,9 @@ class StatisticalTest(str, Enum):
     MCNEMAR = "MCNEMAR"
     PEARSON_CORRELATION = "PEARSON_CORRELATION"
     SPEARMAN_CORRELATION = "SPEARMAN_CORRELATION"
+    MAXBET = "MAXBET"  # nonlinear independence (BET); default BET-family choice
+    BEAST = "BEAST"  # data-adaptive BET variant; reserved for explicit override
+    # Reserved — present in the enum but NOT reachable from the §6 decision tree in v0.1.0.
     LINEAR_REGRESSION = "LINEAR_REGRESSION"
     LOGISTIC_REGRESSION = "LOGISTIC_REGRESSION"
 

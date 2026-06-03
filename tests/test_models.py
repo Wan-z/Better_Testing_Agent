@@ -62,9 +62,10 @@ class TestVariableRoleEnum:
 
 class TestStatisticalTestEnum:
     EXPECTED = {
-        "INDEPENDENT_T", "PAIRED_T", "WELCH_T", "ONE_WAY_ANOVA", "KRUSKAL_WALLIS",
-        "MANN_WHITNEY_U", "WILCOXON_SIGNED_RANK", "CHI_SQUARED", "FISHER_EXACT",
-        "MCNEMAR", "PEARSON_CORRELATION", "SPEARMAN_CORRELATION",
+        "INDEPENDENT_T", "PAIRED_T", "WELCH_T", "ONE_WAY_ANOVA", "WELCH_ANOVA",
+        "KRUSKAL_WALLIS", "MANN_WHITNEY_U", "WILCOXON_SIGNED_RANK", "CHI_SQUARED",
+        "FISHER_EXACT", "MCNEMAR", "PEARSON_CORRELATION", "SPEARMAN_CORRELATION",
+        "MAXBET", "BEAST",
         "LINEAR_REGRESSION", "LOGISTIC_REGRESSION",
     }
 
@@ -72,7 +73,7 @@ class TestStatisticalTestEnum:
         assert {t.value for t in StatisticalTest} == self.EXPECTED
 
     def test_count(self) -> None:
-        assert len(StatisticalTest) == 14
+        assert len(StatisticalTest) == 17
 
 
 class TestAssumptionStatusEnum:

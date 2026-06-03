@@ -295,32 +295,88 @@ Responsibilities:
 
 ## 6. Statistical Decision Logic
 
-The test selection decision tree (implemented in `selector.py`). This is the primary artefact for statistician review.
+The test-selection decision tree, implemented in `selector.py`. This is the primary artefact for statistician review. It is **purely deterministic** and treats every distributional property as a *graded signal*, never as a binary significance gate (§6.1). All numeric thresholds below are proposed defaults pending sign-off by Statistician A.
+
+### 6.1 Distributional policy (supersedes the old "normality gate")
+
+`DataProfiler` supplies signals; the selector consumes them as **data, not as yes/no switches**:
+
+- `outcome_type` ∈ {CONTINUOUS, ORDINAL, BINARY, CATEGORICAL}
+- `n_groups`, `measurement` ∈ {BETWEEN, WITHIN (paired/repeated)}, `n_min` — smallest per-group (or per-pair) sample size
+- `relationship` ∈ {LINEAR, MONOTONE, NONLINEAR} — correlation analyses only; from `StudyDesign.notes` (DesignDialogue rule 7)
+- `table_shape` ∈ {TWO_BY_TWO, RxC} and `min_expected` (smallest expected cell count) — categorical outcomes only
+- `nonnormality` ∈ {NONE, MILD, STRONG} — *severity*, derived from robust descriptors and corroborated by Shapiro–Wilk **only at N ≤ 2 000**. Above N = 2 000 no formal normality test is run — the previous one-sample KS-vs-estimated-parameters path is statistically invalid (it needs Lilliefors) and flags essentially every real dataset, so it is uninformative for selection (resolves correctness issue #2). Severity at large N is judged from skew/kurtosis magnitude alone:
+  - `NONE`: |skew| < 1 and |excess kurtosis| < 2
+  - `MILD`: |skew| ∈ [1, 2) or |excess kurtosis| ∈ [2, 7)
+  - `STRONG`: |skew| ≥ 2 or |excess kurtosis| ≥ 7 (Kim 2013)
+- `force_student` — explicit user override (default `False`) requesting the equal-variance Student's t / pooled ANOVA.
+
+Two consequences encode the agreed policy:
+
+1. **Welch by default, no variance pretest.** For between-subjects continuous comparisons the selector never runs Levene to choose between Student's and Welch's t. Welch's t (and Welch's ANOVA for 3+ groups) is the unconditional default; the equal-variance form is reachable only via `force_student` (resolves correctness issue #3).
+2. **Normality is a soft signal**, not a gate. Parametric-vs-rank is decided by:
+
+```python
+def prefer_rank_based(outcome_type, n_min, nonnormality) -> bool:
+    if outcome_type == ORDINAL:        # scale of measurement, not a normality question
+        return True
+    if n_min >= LARGE_N:               # default LARGE_N = 30 — CLT: the mean is ~normal
+        return False
+    return nonnormality == STRONG      # at small N, only a *strong* departure switches
+```
+
+This replaces the fragile `is_normal = (p > 0.05)` switch: small samples no longer default to a parametric test merely because a low-power normality test failed to reject, and large samples are not forced onto rank methods because a high-power test flagged a trivial departure (resolves correctness issue #1).
+
+### 6.2 Decision tree
 
 ```
-if outcome is CONTINUOUS:
-    if two groups:
-        if WITHIN_SUBJECTS or paired:
-            if normal  → PAIRED_T
-            else       → WILCOXON_SIGNED_RANK
-        else (BETWEEN_SUBJECTS):
-            if normal and equal variances  → INDEPENDENT_T
-            if normal and unequal variances → WELCH_T
-            if non-normal                  → MANN_WHITNEY_U
-    if 3+ groups:
-        if normal  → ONE_WAY_ANOVA
-        else       → KRUSKAL_WALLIS
-    if continuous predictor (correlation / independence):
-        if linear relationship expected and normal  → PEARSON_CORRELATION
-        if monotone relationship expected           → SPEARMAN_CORRELATION
-        if nonlinear or complex dependence expected → MAXBET (default) or BEAST
+# === CONTINUOUS or ORDINAL outcome ===
+if outcome_type in (CONTINUOUS, ORDINAL):
 
-if outcome is BINARY or CATEGORICAL:
-    if two categorical variables:
-        if all expected cell counts ≥ 5  → CHI_SQUARED
-        else                             → FISHER_EXACT
-    if paired binary outcome             → MCNEMAR
+    if n_groups == 2:
+        if measurement == WITHIN:                       # paired / repeated measures
+            → WILCOXON_SIGNED_RANK  if prefer_rank_based(...)  else  PAIRED_T
+        else:                                           # between-subjects
+            if prefer_rank_based(...):  → MANN_WHITNEY_U
+            elif force_student:         → INDEPENDENT_T      # explicit override only
+            else:                       → WELCH_T            # DEFAULT — no variance pretest
+
+    elif n_groups >= 3:                                 # between-subjects omnibus
+        if prefer_rank_based(...):  → KRUSKAL_WALLIS         # post-hoc: Dunn + Holm
+        elif force_student:         → ONE_WAY_ANOVA          # pooled; post-hoc: Tukey HSD
+        else:                       → WELCH_ANOVA            # DEFAULT; post-hoc: Games–Howell
+
+    else:                                               # no grouping var → association of two cont./ord. vars
+        if relationship == NONLINEAR:                              → MAXBET (default) / BEAST (override)
+        elif relationship == MONOTONE or outcome_type == ORDINAL:  → SPEARMAN_CORRELATION
+        else:                                                      # LINEAR expected
+            if n_min < LARGE_N and nonnormality == STRONG:         → SPEARMAN_CORRELATION
+            else:                                                  → PEARSON_CORRELATION
+
+# === BINARY or CATEGORICAL outcome ===
+if outcome_type in (BINARY, CATEGORICAL):
+    if measurement == WITHIN and table_shape == TWO_BY_TWO:        → MCNEMAR        # paired binary
+    elif min_expected >= 5:                                        → CHI_SQUARED
+    else:                                                          → FISHER_EXACT   # 2×2: exact;
+                                                                                    # R×C: Fisher–Freeman–Halton
 ```
+
+### 6.3 Omnibus follow-up and multiple comparisons (resolves scope issue #7)
+
+A 3+ group omnibus result is never reported alone; the planned follow-up and correction family are fixed by the chosen omnibus test and recorded on the `TestResult`:
+
+- `WELCH_ANOVA` → Games–Howell post-hoc (does not assume equal variances), Holm-adjusted.
+- `ONE_WAY_ANOVA` → Tukey HSD.
+- `KRUSKAL_WALLIS` → Dunn's test, Holm-adjusted.
+
+"No correction applied" is no longer a silent default — it would have to be an explicit, recorded choice.
+
+### 6.4 Categorical effect size by table shape (resolves scope issue #6)
+
+Fisher's odds ratio is defined only for 2×2 tables, but the tree reaches `CHI_SQUARED`/`FISHER_EXACT` for general R×C tables too. The executor therefore branches on `table_shape`:
+
+- **2×2** → odds ratio (plus φ). A 2×2 `CHI_SQUARED` also reports the odds ratio.
+- **R×C** → Cramér's V (the odds ratio is undefined; Fisher's exact uses the Fisher–Freeman–Halton generalisation).
 
 ### Effect size implementations
 
@@ -332,9 +388,10 @@ if outcome is BINARY or CATEGORICAL:
 | MANN_WHITNEY_U | Rank-biserial r | `(2U)/(n₁n₂) − 1` |
 | WILCOXON_SIGNED_RANK | Matched-pairs rank-biserial r | Cliff's delta variant |
 | ONE_WAY_ANOVA | η² and ω² | SS decomposition |
+| WELCH_ANOVA | η² and ω² | From Welch-adjusted SS; equal variances not assumed |
 | KRUSKAL_WALLIS | ε² | `(H − k + 1) / (n − k)` |
-| CHI_SQUARED | Cramér's V | `√(χ² / (n · min(r−1, c−1)))` — note grouping of the denominator |
-| FISHER_EXACT | Odds ratio | From contingency table |
+| CHI_SQUARED | Cramér's V (R×C); + odds ratio if 2×2 | `√(χ² / (n · min(r−1, c−1)))` — note grouping of the denominator |
+| FISHER_EXACT | Odds ratio if 2×2; Cramér's V if R×C | OR from the 2×2 table; V for the Fisher–Freeman–Halton case |
 | PEARSON_CORRELATION | r (is its own effect size) | Fisher's z CI |
 | SPEARMAN_CORRELATION | ρ (is its own effect size) | Bootstrap CI |
 | BET / MAXBET / BEAST | BET symmetry statistic + depth | No standardised effect size; report maximum symmetry statistic, depth at which significance was found, and normalised mutual information as a supplementary measure |
@@ -627,21 +684,21 @@ These are open methodological questions raised during design review. They are fl
 
 ### Correctness issues to resolve before implementation
 
-1. **Normality-test-gated test selection is fragile in both directions.** `NormalityTest.is_normal = (p > 0.05)` is used as a hard switch (e.g. `if normal → INDEPENDENT_T else MANN_WHITNEY_U`). Significance tests for normality have low power at small N (so non-normal data passes) and reject trivial, harmless departures at large N (so usable data fails). The "test the assumption, then pick the test" pattern also inflates the overall Type I error rate because the second test is conditioned on the first. Recommendation: treat normality as one input among several (sample size, magnitude of skew/kurtosis, robustness of the candidate test) rather than a binary gate, and/or prefer rank-based or robust methods by default. Statistician A should sign off on the policy.
+1. **Normality-test-gated test selection is fragile in both directions.** `NormalityTest.is_normal = (p > 0.05)` is used as a hard switch (e.g. `if normal → INDEPENDENT_T else MANN_WHITNEY_U`). Significance tests for normality have low power at small N (so non-normal data passes) and reject trivial, harmless departures at large N (so usable data fails). The "test the assumption, then pick the test" pattern also inflates the overall Type I error rate because the second test is conditioned on the first. Recommendation: treat normality as one input among several (sample size, magnitude of skew/kurtosis, robustness of the candidate test) rather than a binary gate, and/or prefer rank-based or robust methods by default. Statistician A should sign off on the policy. **→ Resolved in §6.1 (`prefer_rank_based`); the NONE/MILD/STRONG thresholds and `LARGE_N` default await Statistician A sign-off.**
 
-2. **KS branch for N > 2000 is statistically invalid as specified.** A one-sample Kolmogorov–Smirnov test comparing data to a normal distribution whose mean and SD are *estimated from that same data* does not have the standard KS null distribution — it requires the Lilliefors correction. As written (§5.1, §10 Step 3), the N > 2000 path would produce anti-conservative p-values. Also, at N > 2000 essentially any real dataset will be flagged non-normal, making the test nearly useless for selection. Recommendation: drop the formal test at large N in favor of effect-magnitude heuristics, or use Lilliefors/Anderson–Darling explicitly.
+2. **KS branch for N > 2000 is statistically invalid as specified.** A one-sample Kolmogorov–Smirnov test comparing data to a normal distribution whose mean and SD are *estimated from that same data* does not have the standard KS null distribution — it requires the Lilliefors correction. As written (§5.1, §10 Step 3), the N > 2000 path would produce anti-conservative p-values. Also, at N > 2000 essentially any real dataset will be flagged non-normal, making the test nearly useless for selection. Recommendation: drop the formal test at large N in favor of effect-magnitude heuristics, or use Lilliefors/Anderson–Darling explicitly. **→ Resolved in §6.1: no formal normality test is run above N = 2 000; severity there comes from skew/kurtosis magnitude.**
 
-3. **Welch vs. Student via a variance pretest (Levene) repeats the same pretest problem.** Current §6 logic chooses Student's t when variances are "equal." The modern recommendation is to use Welch's t unconditionally for between-subjects continuous comparisons — it is nearly as powerful under equal variances and far safer under unequal variances, with no pretest. Recommendation: consider making `WELCH_T` the default and reserving `INDEPENDENT_T` for an explicit user override.
+3. **Welch vs. Student via a variance pretest (Levene) repeats the same pretest problem.** Current §6 logic chooses Student's t when variances are "equal." The modern recommendation is to use Welch's t unconditionally for between-subjects continuous comparisons — it is nearly as powerful under equal variances and far safer under unequal variances, with no pretest. Recommendation: consider making `WELCH_T` the default and reserving `INDEPENDENT_T` for an explicit user override. **→ Resolved in §6.1/§6.2: `WELCH_T` (and `WELCH_ANOVA` for 3+ groups) is the default with no variance pretest; the equal-variance forms require `force_student`.**
 
 4. **"Report power when computable" risks reporting observed (post-hoc) power.** Observed power is a deterministic monotone function of the p-value and adds no information; APA and most methodologists discourage it. Recommendation: report *a priori* or *sensitivity* power (minimum detectable effect at the observed N) instead, and never compute power from the observed effect size. The `WARNING: power < 0.80` caveat (§5.6.1) should be re-specified accordingly.
 
 ### Scope / consistency gaps
 
-5. **`LINEAR_REGRESSION` and `LOGISTIC_REGRESSION` are in the `StatisticalTest` enum (14 members) but absent from the decision tree (§6) and the effect-size table (which lists 11).** Either remove them from the enum for v0.1.0 or add their selection rules, assumption checks, and effect sizes. As-is, the selector can never return them, which will confuse reviewers.
+5. **`LINEAR_REGRESSION` and `LOGISTIC_REGRESSION` are in the `StatisticalTest` enum (14 members) but absent from the decision tree (§6) and the effect-size table (which lists 11).** Either remove them from the enum for v0.1.0 or add their selection rules, assumption checks, and effect sizes. As-is, the selector can never return them, which will confuse reviewers. **→ Partially addressed: both are now explicitly commented as reserved/non-selectable in `test.py`, and the BET-family members the tree actually returns (`WELCH_ANOVA`, `MAXBET`, `BEAST`) have been added so the enum matches §6. Final remove-vs-implement call for the regressions still pending.**
 
-6. **`FISHER_EXACT` / odds-ratio effect size is only defined for 2×2 tables, but the tree branches on "two categorical variables" generically.** For R×C tables, Fisher's exact generalizes but the odds ratio does not; Cramér's V is the appropriate effect size. The selector and executor need an explicit 2×2-vs-R×C distinction.
+6. **`FISHER_EXACT` / odds-ratio effect size is only defined for 2×2 tables, but the tree branches on "two categorical variables" generically.** For R×C tables, Fisher's exact generalizes but the odds ratio does not; Cramér's V is the appropriate effect size. The selector and executor need an explicit 2×2-vs-R×C distinction. **→ Resolved in §6.4: the executor branches on `table_shape` (2×2 → odds ratio; R×C → Cramér's V via Fisher–Freeman–Halton).**
 
-7. **ANOVA / Kruskal–Wallis omnibus results need a post-hoc and correction policy.** Multiple comparisons are currently only an `INFO` caveat. For 3+ groups the report should specify the planned follow-up (e.g. Tukey HSD, Dunn's test) and the family-wise or FDR correction, or explicitly state that none is performed and why.
+7. **ANOVA / Kruskal–Wallis omnibus results need a post-hoc and correction policy.** Multiple comparisons are currently only an `INFO` caveat. For 3+ groups the report should specify the planned follow-up (e.g. Tukey HSD, Dunn's test) and the family-wise or FDR correction, or explicitly state that none is performed and why. **→ Resolved in §6.3: Games–Howell (Welch ANOVA) / Tukey HSD (pooled ANOVA) / Dunn (Kruskal–Wallis), Holm-adjusted, recorded on the `TestResult`.**
 
 ### Architecture / configuration
 
