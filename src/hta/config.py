@@ -11,10 +11,21 @@ from dotenv import load_dotenv
 _env_path = Path(__file__).parent.parent.parent / ".env"
 load_dotenv(_env_path)
 
-# === Azure OpenAI (GPT-5.4, primary LLM) ===
-AZURE_OPENAI_API_KEY: str    = os.getenv("AZURE_OPENAI_API_KEY", "")
-AZURE_OPENAI_BASE_URL: str   = os.getenv("AZURE_OPENAI_BASE_URL", "https://azureaiapi.cloud.unc.edu/openai/v1/")
-AZURE_OPENAI_DEPLOYMENT: str = os.getenv("AZURE_OPENAI_DEPLOYMENT", "gpt-5.4")
+# === LLM provider — "anthropic" or "openai" ===
+LLM_PROVIDER: str = os.getenv("LLM_PROVIDER", "anthropic").lower()
+
+# === Anthropic ===
+ANTHROPIC_API_KEY: str = os.getenv("ANTHROPIC_API_KEY", "")
+ANTHROPIC_MODEL: str   = os.getenv("ANTHROPIC_MODEL", "claude-sonnet-4-6")
+
+# === OpenAI / Azure OpenAI ===
+OPENAI_API_KEY: str  = os.getenv("OPENAI_API_KEY", "")
+OPENAI_BASE_URL: str = (
+    os.getenv("AZURE_OPENAI_ENDPOINT")
+    or os.getenv("OPENAI_BASE_URL")
+    or "https://api.openai.com/v1"
+)
+OPENAI_MODEL: str = os.getenv("OPENAI_MODEL", "gpt-4o")
 
 # === Statistical defaults ===
 DEFAULT_ALPHA: float = float(os.getenv("HTA_DEFAULT_ALPHA", "0.05"))

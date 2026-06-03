@@ -50,7 +50,7 @@ def _build_profile(df: pd.DataFrame, outcome: str | None, group: str | None) -> 
             "n_missing": n_miss,
         }
 
-        if vtype in ("CONTINUOUS", "ORDINAL"):
+        if vtype in ("CONTINUOUS", "ORDINAL") and pd.api.types.is_numeric_dtype(df[col]):
             series = df[col].dropna().astype(float)
             var["distribution_stats"] = {
                 "mean": round(float(series.mean()), 4),

@@ -8,7 +8,11 @@ import json
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import StreamingResponse
 
-from web.backend.config import DRY_RUN, AZURE_OPENAI_API_KEY, AZURE_OPENAI_BASE_URL, AZURE_OPENAI_DEPLOYMENT
+from web.backend.config import (
+    DRY_RUN, LLM_PROVIDER,
+    ANTHROPIC_API_KEY, ANTHROPIC_MODEL,
+    OPENAI_API_KEY, OPENAI_BASE_URL, OPENAI_MODEL,
+)
 from web.backend.schemas import DialoguePayload
 from web.backend.storage.local import LocalStorage
 from web.backend.stubs import STUB_DIALOGUE_TURNS, STUB_STUDY_DESIGN
@@ -38,39 +42,115 @@ async def _stream_dry_run(session_id: str, turn: int) -> object:
         yield _sse({"type": "done", "is_complete": False})
 
 
+SYSTEM = (
+    "You are a statistical study design expert. Ask up to 3 questions per turn to "
+    "elicit: (1) experimental vs observational design, (2) independence of observations, "
+    "(3) potential confounders, (4) relationship form (linear/monotone/nonlinear) if "
+    "both variables are continuous. When you have enough information call the "
+    "capture_study_design tool."
+)
+
+TOOL_SCHEMA = {
+    "name": "capture_study_design",
+    "description": "Record the fully-elicited study design.",
+    "properties": {
+        "design_type": {"type": "string", "enum": ["EXPERIMENTAL", "OBSERVATIONAL", "QUASI_EXPERIMENTAL"]},
+        "measurement_type": {"type": "string", "enum": ["BETWEEN_SUBJECTS", "WITHIN_SUBJECTS", "MIXED"]},
+        "is_randomized": {"type": "boolean"},
+        "relationship_form": {"type": "string", "enum": ["linear", "monotone", "nonlinear", "unknown"]},
+        "confounder_names": {"type": "array", "items": {"type": "string"}},
+    },
+    "required": ["design_type", "measurement_type", "is_randomized"],
+}
+
+
+def _build_design(args: dict) -> dict:  # type: ignore[type-arg]
+    confounders = [
+        {"name": n, "role": "CONFOUNDER", "is_measured": True,
+         "adjustment_recommended": True, "rationale": ""}
+        for n in args.get("confounder_names", [])
+    ]
+    form = args.get("relationship_form", "unknown")
+    return {
+        "design_type": args["design_type"],
+        "measurement_type": args["measurement_type"],
+        "is_randomized": args["is_randomized"],
+        "confounders": confounders,
+        "notes": [form] if form not in ("linear", "unknown") else [],
+    }
+
+
 async def _stream_live(session_id: str, history: list[dict[str, str]]) -> object:  # type: ignore[return]
-    """Yield SSE chunks from the real GPT-5.4 API (Phase W3)."""
-    from openai import AsyncAzureOpenAI
+    """Yield SSE chunks — routes to Anthropic or OpenAI based on LLM_PROVIDER."""
+    if LLM_PROVIDER == "anthropic":
+        async for chunk in _stream_anthropic(session_id, history):
+            yield chunk
+    else:
+        async for chunk in _stream_openai(session_id, history):
+            yield chunk
 
-    client = AsyncAzureOpenAI(
-        api_key=AZURE_OPENAI_API_KEY,
-        azure_endpoint=AZURE_OPENAI_BASE_URL,
-        api_version="2024-02-01",
-    )
 
-    SYSTEM = (
-        "You are a statistical study design expert. Ask up to 3 questions per turn to "
-        "elicit: (1) experimental vs observational design, (2) independence of observations, "
-        "(3) potential confounders, (4) relationship form (linear/monotone/nonlinear) if "
-        "both variables are continuous. When you have enough information call the "
-        "capture_study_design function."
-    )
+async def _stream_anthropic(session_id: str, history: list[dict[str, str]]) -> object:  # type: ignore[return]
+    import anthropic
 
-    TOOLS = [{
+    client = anthropic.AsyncAnthropic(api_key=ANTHROPIC_API_KEY)
+
+    tools: list[anthropic.types.ToolParam] = [{
+        "name": TOOL_SCHEMA["name"],
+        "description": TOOL_SCHEMA["description"],
+        "input_schema": {
+            "type": "object",
+            "properties": TOOL_SCHEMA["properties"],
+            "required": TOOL_SCHEMA["required"],
+        },
+    }]
+
+    accumulated = ""
+    tool_input_json = ""
+    is_tool_call = False
+
+    async with client.messages.stream(
+        model=ANTHROPIC_MODEL,
+        system=SYSTEM,
+        messages=history,  # type: ignore[arg-type]
+        tools=tools,
+        max_tokens=512,
+    ) as stream:
+        async for event in stream:
+            if event.type == "content_block_delta":
+                if event.delta.type == "text_delta":
+                    accumulated += event.delta.text
+                    yield _sse({"type": "token", "content": event.delta.text})
+                elif event.delta.type == "input_json_delta":
+                    is_tool_call = True
+                    tool_input_json += event.delta.partial_json
+
+    if is_tool_call and tool_input_json:
+        design = _build_design(json.loads(tool_input_json))
+        store.write_json(session_id, "design.json", design)
+        store.set_status(session_id, "DESIGNED")
+        yield _sse({"type": "done", "is_complete": True, "study_design": design})
+    else:
+        if accumulated:
+            history.append({"role": "assistant", "content": accumulated})
+            store.write_json(session_id, "dialogue_history.json", history)
+        yield _sse({"type": "done", "is_complete": False})
+
+
+async def _stream_openai(session_id: str, history: list[dict[str, str]]) -> object:  # type: ignore[return]
+    from openai import AsyncOpenAI
+
+    client = AsyncOpenAI(api_key=OPENAI_API_KEY, base_url=OPENAI_BASE_URL)
+
+    tools = [{
         "type": "function",
         "function": {
-            "name": "capture_study_design",
-            "description": "Record the fully-elicited study design.",
+            "name": TOOL_SCHEMA["name"],
+            "description": TOOL_SCHEMA["description"],
             "parameters": {
                 "type": "object",
-                "properties": {
-                    "design_type": {"type": "string", "enum": ["EXPERIMENTAL", "OBSERVATIONAL", "QUASI_EXPERIMENTAL"]},
-                    "measurement_type": {"type": "string", "enum": ["BETWEEN_SUBJECTS", "WITHIN_SUBJECTS", "MIXED"]},
-                    "is_randomized": {"type": "boolean"},
-                    "relationship_form": {"type": "string", "enum": ["linear", "monotone", "nonlinear", "unknown"]},
-                    "confounder_names": {"type": "array", "items": {"type": "string"}},
-                },
-                "required": ["design_type", "measurement_type", "is_randomized"],
+                "properties": TOOL_SCHEMA["properties"],
+                "required": TOOL_SCHEMA["required"],
             },
         },
     }]
@@ -80,11 +160,11 @@ async def _stream_live(session_id: str, history: list[dict[str, str]]) -> object
     is_tool_call = False
 
     stream = await client.chat.completions.create(
-        model=AZURE_OPENAI_DEPLOYMENT,
+        model=OPENAI_MODEL,
         messages=[{"role": "system", "content": SYSTEM}] + history,  # type: ignore[arg-type]
-        tools=TOOLS,  # type: ignore[arg-type]
+        tools=tools,  # type: ignore[arg-type]
         stream=True,
-        max_completion_tokens=512,
+        max_tokens=512,
     )
 
     async for chunk in stream:
@@ -101,20 +181,7 @@ async def _stream_live(session_id: str, history: list[dict[str, str]]) -> object
             yield _sse({"type": "token", "content": delta.content})
 
     if is_tool_call and tool_call_args:
-        args = json.loads(tool_call_args)
-        confounders = [
-            {"name": n, "role": "CONFOUNDER", "is_measured": True,
-             "adjustment_recommended": True, "rationale": ""}
-            for n in args.get("confounder_names", [])
-        ]
-        form = args.get("relationship_form", "unknown")
-        design = {
-            "design_type": args["design_type"],
-            "measurement_type": args["measurement_type"],
-            "is_randomized": args["is_randomized"],
-            "confounders": confounders,
-            "notes": [form] if form not in ("linear", "unknown") else [],
-        }
+        design = _build_design(json.loads(tool_call_args))
         store.write_json(session_id, "design.json", design)
         store.set_status(session_id, "DESIGNED")
         yield _sse({"type": "done", "is_complete": True, "study_design": design})
