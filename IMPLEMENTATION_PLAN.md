@@ -77,7 +77,7 @@ Before coding begins, these open questions from §10b of the technical report ar
 
 ## Step 1d — EDA dependence models ✅ DONE
 
-**Goal:** Carry the BET exploratory-dependence findings (arXiv:2202.09880) through the models.
+**Goal:** Carry the BET exploratory-dependence findings (Xiang et al. 2023, *Ann. Appl. Stat.* 17(4), DOI 10.1214/23-AOAS1745; preprint arXiv:2202.09880) through the models.
 **Files touched:** `src/hta/models/data.py`, `src/hta/models/design.py`, `tests/test_models.py`
 
 - [x] **`DependenceForm`** enum (LINEAR, MONOTONE, PARABOLIC, SINUSOIDAL, CHECKERBOARD,
@@ -244,7 +244,8 @@ Severity thresholds (proposed defaults, pending Statistician A sign-off):
 
 ## Step 3a — BET exploratory dependence screen ✅ DONE (engine + tests)
 
-**Goal:** Implement the pairwise nonlinear-dependence EDA of **arXiv:2202.09880** as the
+**Goal:** Implement the pairwise nonlinear-dependence EDA of **Xiang et al. (2023), *Ann.
+Appl. Stat.* 17(4), DOI 10.1214/23-AOAS1745** (preprint arXiv:2202.09880) as the
 profiler's discovery stage.
 **Files created:** `src/hta/bet_screen.py`, `tests/test_bet_screen.py`
 

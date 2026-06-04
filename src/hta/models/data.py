@@ -42,7 +42,8 @@ class VariableType(str, Enum):
 
 class DependenceForm(str, Enum):
     """Form of pairwise dependence read from the dominant BET Binary Interaction
-    Design (arXiv:2202.09880). Maps to the selector's relationship signal:
+    Design (Xiang et al. 2023, Ann. Appl. Stat. 17(4), DOI 10.1214/23-AOAS1745;
+    preprint arXiv:2202.09880). Maps to the selector's relationship signal:
     LINEAR/MONOTONE stay parametric/rank; the rest are nonlinear (→ MaxBET) and the
     mixture-type forms often signal latent subgroups (CHECKERBOARD/SINUSOIDAL/PARABOLIC).
     """
@@ -61,7 +62,8 @@ class DependenceFinding(BaseModel):
 
     nonlinear_only is True when BET is significant but |Pearson| and |Spearman| are
     both small — dependence that linear methods miss, the key discovery in
-    arXiv:2202.09880. `form` and `direction` come from the dominant BID and the sign
+    Xiang et al. (2023), Ann. Appl. Stat. 17(4), DOI 10.1214/23-AOAS1745
+    (preprint arXiv:2202.09880). `form` and `direction` come from the dominant BID and the sign
     of its symmetry statistic S.
     """
 

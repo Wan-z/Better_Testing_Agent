@@ -2,8 +2,10 @@
 
 This implements the exploratory-data-analysis (EDA) workflow of
 
-    Xiang, Zhang, Liu, Hoadley, Perou, Zhang & Marron,
-    "Pairwise Nonlinear Dependence Analysis of Genomic Data", arXiv:2202.09880,
+    Xiang, S., Zhang, W., Liu, S., Hoadley, K. A., Perou, C. M., Zhang, K., & Marron, J. S.
+    (2023). "Pairwise Nonlinear Dependence Analysis of Genomic Data."
+    The Annals of Applied Statistics, 17(4). DOI: 10.1214/23-AOAS1745.
+    (Preprint: arXiv:2202.09880.)
 
 adapted as the dependence-discovery stage of the Hypothesis Testing Agent. The
 goal is to surface dependence — *especially nonlinear dependence that Pearson /

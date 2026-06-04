@@ -76,7 +76,7 @@ non-proportional hazards, informative censoring, prevalence-dependence). See
 
 Before any test is chosen, the profiler runs a **Binary Expansion Testing** screen
 (`src/hta/bet_screen.py`) over the numeric columns, following
-[Xiang, Zhang, …, Zhang & Marron (arXiv:2202.09880)](https://arxiv.org/abs/2202.09880). For
+[Xiang, Zhang, Liu, Hoadley, Perou, Zhang & Marron (2023), *Ann. Appl. Stat.* 17(4), DOI 10.1214/23-AOAS1745](https://projecteuclid.org/journals/annals-of-applied-statistics/volume-17/issue-4/Pairwise-nonlinear-dependence-analysis-of-genomic-data/10.1214/23-AOAS1745.full) (preprint [arXiv:2202.09880](https://arxiv.org/abs/2202.09880)). For
 every pair it copula-transforms the data (jittering ties / zero-inflation), runs depth-2
 MaxBET, and reports the **form** of dependence (monotone, parabolic, "W"-bimodal,
 checkerboard, linear) with its direction — flagging **nonlinear-only** pairs that Pearson and

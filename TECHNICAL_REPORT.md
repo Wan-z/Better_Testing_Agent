@@ -233,8 +233,10 @@ Responsibilities:
 
 #### 5.1a Exploratory dependence analysis — BET pairwise screen
 
-Following **arXiv:2202.09880** (Xiang, Zhang, …, Zhang & Marron — *Pairwise Nonlinear
-Dependence Analysis of Genomic Data*), the profiler runs a deterministic EDA pass over the
+Following **Xiang, Zhang, Liu, Hoadley, Perou, Zhang & Marron (2023), "Pairwise Nonlinear
+Dependence Analysis of Genomic Data," *The Annals of Applied Statistics* 17(4),
+DOI [10.1214/23-AOAS1745](https://doi.org/10.1214/23-AOAS1745)** (preprint arXiv:2202.09880),
+the profiler runs a deterministic EDA pass over the
 CONTINUOUS/COUNT/ORDINAL columns *before* any test is selected, implemented in
 `hta/bet_screen.py` (pure-stdlib, no R/numpy needed for the depth-2 screen):
 
@@ -604,7 +606,7 @@ are listed in the implementation chat log and the README references.
 
 ### BET (Binary Expansion Testing) — methodology note
 
-BET was developed by Kai Zhang (UNC Chapel Hill) and is described in *"BET on Independence"* (JASA, 2019). It is the appropriate choice when the user suspects any form of statistical dependence between two continuous variables that is not necessarily linear or monotone.
+BET was developed by Kai Zhang (UNC Chapel Hill) and is described in *"BET on Independence"* (JASA, 2019). Its application to pairwise nonlinear-dependence exploratory analysis — the basis for the EDA screen in §5.1a — is Xiang, Zhang, Liu, Hoadley, Perou, Zhang & Marron (2023), *"Pairwise Nonlinear Dependence Analysis of Genomic Data,"* The Annals of Applied Statistics 17(4), DOI [10.1214/23-AOAS1745](https://doi.org/10.1214/23-AOAS1745) (preprint arXiv:2202.09880). BET is the appropriate choice when the user suspects any form of statistical dependence between two continuous variables that is not necessarily linear or monotone.
 
 **Algorithm:**
 1. Rank-transform both variables to [0, 1] via the empirical CDF (producing the empirical copula).
@@ -697,7 +699,7 @@ The system prompt given to GPT-5.4 enforces the following dialogue rules:
 
 Rule 7 (added for BET support): When the user's hypothesis involves association or dependence between two continuous variables, ask: *"Do you expect the relationship to be linear, monotone, or potentially nonlinear/complex?"* The answer is stored in `StudyDesign.notes` and used by the selector to choose between Pearson, Spearman, and BET (see §6). The BET EDA screen (§5.1a) pre-fills the likely answer from the data, so the question is framed as a confirmation.
 
-Rule 8 (added for the EDA subgroup step, arXiv:2202.09880): When the BET screen flags the
+Rule 8 (added for the EDA subgroup step, Xiang et al. 2023, *Ann. Appl. Stat.* 17(4), DOI 10.1214/23-AOAS1745): When the BET screen flags the
 outcome/predictor pair as **nonlinear** — especially a mixture-type form (CHECKERBOARD,
 SINUSOIDAL/"W"-bimodal, or PARABOLIC), or a `nonlinear_only` pair — present that finding and
 ask: *"This pattern is often produced by a mix of subgroups. Are there known subgroups or
