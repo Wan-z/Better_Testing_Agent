@@ -14,40 +14,38 @@ Before coding begins, these open questions from §10b of the technical report ar
 
 | # | Issue | Resolution |
 |---|---|---|
-| 1 | Normality as hard binary gate | **Treat as soft signal.** Selector uses normality *plus* skewness magnitude and sample size. See Step 5 selector logic. |
-| 2 | KS test invalid at N > 2000 | **Use Anderson–Darling** (scipy `anderson`) for N > 2000 instead of KS. Threshold: use the 5% critical value from the returned table. |
-| 3 | Welch vs Student via Levene pretest | **Welch is the default** for all between-subjects continuous comparisons. `INDEPENDENT_T` (Student's) is reserved for explicit user override and will not be returned by the selector in v0.1.0. |
+| 1 | Normality as hard binary gate | **Treat as a graded `NONE`/`MILD`/`STRONG` signal, never a binary gate.** The selector consumes severity via `prefer_rank_based(outcome_type, n_min, nonnormality)`: `ORDINAL` and a `STRONG` departure at small N go rank-based; `n_min ≥ LARGE_N` (default 30) goes parametric by the CLT. See Step 5 selector logic and TECHNICAL_REPORT §6.1. |
+| 2 | KS / formal normality test invalid at N > 2000 | **Drop the formal normality test above N = 2000.** Shapiro–Wilk corroborates severity at N ≤ 2000; above 2000 no formal test is run (one-sample KS vs *estimated* parameters needs Lilliefors and flags essentially every real dataset). Severity above 2000 comes from skew/kurtosis magnitude alone. See §6.1. |
+| 3 | Welch vs Student via Levene pretest | **Welch is the unconditional default** for between-subjects continuous comparisons — `WELCH_T` (2 groups) and `WELCH_ANOVA` (3+ groups), with no variance pretest. The equal-variance forms (`INDEPENDENT_T`, `ONE_WAY_ANOVA`) are reachable only via an explicit `force_student` override and are otherwise never returned by the selector in v0.1.0. |
 | 4 | Observed (post-hoc) power | **Never compute observed power.** Report *sensitivity power* only: the minimum detectable effect at the observed N and α=0.05, using `statsmodels.stats.power`. The `power < 0.80` caveat triggers when MDE > 0.5 (large effect only). |
-| 5 | LINEAR/LOGISTIC_REGRESSION in enum but not in tree | **Keep in enum** (removing would break JSON round-trips). Selector never returns them in v0.1.0. Executor raises `NotImplementedError` if called. Document as "planned for v0.2.0". |
-| 6 | FISHER_EXACT / odds ratio for R×C tables | **Add 2×2 vs R×C split.** Selector checks contingency table shape; R×C → CHI_SQUARED with Cramér's V; 2×2 only → FISHER_EXACT with odds ratio. |
-| 7 | ANOVA / Kruskal post-hoc policy | **Always run post-hoc.** ANOVA → Tukey HSD (pingouin); Kruskal–Wallis → Dunn's test with Holm correction (scikit-posthocs). Results stored in `TestResult.notes`. |
+| 5 | LINEAR/LOGISTIC_REGRESSION in enum but not in tree | **Keep in enum** (removing would break JSON round-trips). Marked reserved/non-selectable in `test.py`. Selector never returns them in v0.1.0. Executor raises `NotImplementedError` if called. Document as "planned for v0.2.0". |
+| 6 | FISHER_EXACT / odds ratio for R×C tables | **Split selection by expected counts and effect size by table shape.** Selector: `min_expected ≥ 5` → `CHI_SQUARED`, else `FISHER_EXACT` (2×2 exact; R×C uses the Fisher–Freeman–Halton generalisation). Executor reports effect size by `table_shape`: 2×2 → odds ratio (+ φ; a 2×2 χ² also reports OR); R×C → Cramér's V. |
+| 7 | ANOVA / Kruskal post-hoc policy | **Always run post-hoc, Holm-adjusted, recorded on `TestResult`.** `WELCH_ANOVA` → Games–Howell (no equal-variance assumption); `ONE_WAY_ANOVA` → Tukey HSD (pingouin); `KRUSKAL_WALLIS` → Dunn's test (scikit-posthocs). "No correction" is never a silent default. |
 | 8 | Secrets path coupling | **Resolved.** `config.py` loads from `.env` at the project root. No external path dependency. |
 
 ---
 
-## Step 1b — Model updates for BET
+## Step 1b — Model updates for the reconciled tree ✅ DONE (commit `41ca304`)
 
-**Goal:** Extend `StatisticalTest` enum with three BET variants; update tests.  
+**Goal:** Extend `StatisticalTest` enum so the code matches the §6 decision tree; update tests.  
 **Blocked by:** nothing (Step 1 is done)  
-**Files touched:** `src/hta/models/test.py`, `tests/test_models.py`, `tests/conftest.py`
+**Files touched:** `src/hta/models/test.py`, `tests/test_models.py`
+
+> **Status:** Completed by the decision-tree reconcile commit. The members actually added differ from the original BET-only sketch: the tree returns `WELCH_ANOVA` and the BET-family `MAXBET`/`BEAST`, so those three were added (no single-depth `BET` member — it is not reachable from the tree). The conftest BET fixtures were not added and are not required by the tree.
 
 ### Tasks
 
-- [ ] **`src/hta/models/test.py`** — Add three members after `SPEARMAN_CORRELATION`:
+- [x] **`src/hta/models/test.py`** — Three members added so the enum matches the tree:
   ```python
-  BET    = "BET"     # single-depth Binary Expansion Test (rarely used directly)
-  MAXBET = "MAXBET"  # depth-adaptive MaxBET — default for nonlinear independence testing
-  BEAST  = "BEAST"   # adaptive-weighted BEAST — most robust, unknown dependence structure
+  WELCH_ANOVA = "WELCH_ANOVA"  # default for 3+ group between-subjects continuous
+  MAXBET      = "MAXBET"       # nonlinear independence (BET); default BET-family choice
+  BEAST       = "BEAST"        # data-adaptive BET variant; reserved for explicit override
   ```
+  `INDEPENDENT_T` / `ONE_WAY_ANOVA` annotated as explicit-override-only; `LINEAR_REGRESSION` / `LOGISTIC_REGRESSION` annotated reserved (non-selectable in v0.1.0).
 
-- [ ] **`tests/test_models.py`** — Update the enum-count assertion from 14 → 17. Add three test cases:
-  - `TestResult` constructed with `test_used=StatisticalTest.MAXBET`, `effect_size.measure_name="BET symmetry statistic"`, `degrees_of_freedom=None`.
-  - JSON round-trip for the MAXBET `TestResult`.
-  - Enum membership: `assert StatisticalTest.BEAST in StatisticalTest`.
+- [x] **`tests/test_models.py`** — Enum-count assertion updated 14 → 17; `EXPECTED` value set updated to the 17-member set.
 
-- [ ] **`tests/conftest.py`** — Add `bet_effect_size` and `bet_test_result` fixtures to mirror the existing `effect_size` / `test_result` fixtures but with BET-specific field values.
-
-**Gate:** `pytest tests/test_models.py` → 71+ passing, 0 failing.
+**Gate:** `pytest tests/test_models.py` → passing with the 17-member enum. ✅
 
 ---
 
@@ -124,15 +122,24 @@ class DataProfiler:
 4. Numeric, ≤ 10 unique integer values → `ORDINAL`
 5. Everything else → `CONTINUOUS`
 
-### Normality testing
+### Normality severity (graded, not a binary gate)
 
-| N | Test | Implementation |
+The profiler emits a **severity** signal `nonnormality ∈ {NONE, MILD, STRONG}`, derived from robust descriptors (skew / excess kurtosis), per §6.1 of the technical report. There is **no formal normality test above N = 2000** — a one-sample KS / Shapiro test against *estimated* parameters is statistically invalid there and flags essentially every real dataset, so it is uninformative for selection.
+
+| N | Corroboration | Severity source |
 |---|---|---|
-| ≤ 2000 | Shapiro–Wilk | `scipy.stats.shapiro` |
-| > 2000 | Anderson–Darling | `scipy.stats.anderson`; `is_normal = statistic < cv[2]` (5% critical value, index 2) |
+| ≤ 2000 | Shapiro–Wilk (`scipy.stats.shapiro`) corroborates | skew/kurtosis magnitude, corroborated by Shapiro–Wilk |
+| > 2000 | none — no formal test run | skew/kurtosis magnitude **alone** |
 
-`NormalityTest.name` = `"Shapiro-Wilk"` or `"Anderson-Darling"` respectively.  
-Only computed for `CONTINUOUS` and `ORDINAL` variables.
+Severity thresholds (proposed defaults, pending Statistician A sign-off):
+
+| Severity | Condition |
+|---|---|
+| `NONE`   | \|skew\| < 1 and \|excess kurtosis\| < 2 |
+| `MILD`   | \|skew\| ∈ [1, 2) or \|excess kurtosis\| ∈ [2, 7) |
+| `STRONG` | \|skew\| ≥ 2 or \|excess kurtosis\| ≥ 7 (Kim 2013) |
+
+`NormalityTest.name` = `"Shapiro-Wilk"` when a formal test is run (N ≤ 2000); `None`/`"none (N>2000)"` otherwise. The graded `nonnormality` severity (not a bare `is_normal` boolean) is what the selector consumes. Only computed for `CONTINUOUS` and `ORDINAL` variables.
 
 ### Data quality notes (appended to `DataProfile.notes`)
 
@@ -146,21 +153,22 @@ Only computed for `CONTINUOUS` and `ORDINAL` variables.
 
 | Test | Description |
 |---|---|
-| `test_normal_continuous` | Known-normal data → `is_normal=True`, correct stats |
-| `test_skewed_continuous` | Log-normal data → `is_normal=False` |
+| `test_normal_continuous` | Known-normal data (N ≤ 2000) → Shapiro–Wilk `is_normal=True`, `nonnormality=NONE`, correct stats |
+| `test_skewed_continuous` | Log-normal data → `nonnormality=STRONG` (\|skew\| ≥ 2) |
 | `test_binary_detection` | Two-value column → `BINARY` |
 | `test_categorical_detection` | String column → `CATEGORICAL` |
 | `test_ordinal_detection` | Integer 1–5 column → `ORDINAL` |
 | `test_missing_data_note` | >5% NaN → note added |
 | `test_constant_variable_note` | All-same column → note added |
 | `test_outlier_note` | Z > 3.5 value → note added |
-| `test_group_level_stats` | Group variable → per-group normality |
-| `test_large_n_anderson_darling` | N=2500 → Anderson–Darling used |
+| `test_group_level_stats` | Group variable → per-group severity |
+| `test_severity_grading` | NONE/MILD/STRONG assigned correctly from skew/kurtosis thresholds |
+| `test_large_n_no_formal_test` | N=2500 → no Shapiro–Wilk run; severity from skew/kurtosis alone |
 | `test_input_formats` | list-of-dicts and dict-of-lists accepted |
 | `test_publishes_event` | `EVENT_DATA_PROFILED` fired with correct payload |
 | `test_csv_string_input` | CSV string parsed correctly |
 
-**Gate:** `pytest tests/test_profiler.py` → 13 passing, 0 failing.
+**Gate:** `pytest tests/test_profiler.py` → 14 passing, 0 failing.
 
 ---
 
@@ -256,60 +264,66 @@ class TestSelector:
     ) -> str: ...
 ```
 
-`select()` publishes `EVENT_TEST_SELECTED` and returns the enum value.
+`select()` publishes `EVENT_TEST_SELECTED` and returns the enum value. The tree is **purely deterministic** and mirrors TECHNICAL_REPORT §6.2 exactly. Every distributional property is consumed as a *graded signal*, never as a binary significance gate.
 
-### Decision tree (full, incorporating all resolutions)
+### Signals consumed (from `profile` and `design`)
 
-```
-outcome_var = profile.outcome_variable
-outcome = profile.variables[outcome_var].variable_type
+- `outcome_type` ∈ {CONTINUOUS, ORDINAL, BINARY, CATEGORICAL}
+- `n_groups`; `measurement` ∈ {BETWEEN, WITHIN} (paired/repeated → WITHIN; MIXED treated as WITHIN here)
+- `n_min` — smallest per-group (or per-pair) sample size
+- `relationship` ∈ {LINEAR, MONOTONE, NONLINEAR} — correlation path only; from `StudyDesign.notes` (DesignDialogue rule 7), default LINEAR
+- `table_shape` ∈ {TWO_BY_TWO, RxC} and `min_expected` (smallest expected cell count) — categorical outcomes only
+- `nonnormality` ∈ {NONE, MILD, STRONG} — severity from the profiler (§6.1 / Step 3)
+- `force_student` — explicit user override (default `False`)
 
-if outcome is CONTINUOUS:
-    n_groups = profile.n_groups or 1
+### Normality helper (`prefer_rank_based`)
 
-    if n_groups == 1 and there is a continuous predictor:
-        # Correlation / independence path
-        relationship = "nonlinear" if ("nonlinear" in design.notes or "complex" in design.notes) else
-                       "linear"    if "linear" in design.notes else
-                       "monotone"                                    # default
-        if relationship == "nonlinear":
-            → MAXBET   # BEAST is in the enum but not selectable in v0.1.0
-        elif relationship == "linear" and outcome_is_normal and predictor_is_normal:
-            → PEARSON_CORRELATION
-        else:
-            → SPEARMAN_CORRELATION
+Replaces the old binary `_is_normal` gate. `LARGE_N` default = 30 (proposed, pending Statistician A sign-off):
 
-    elif n_groups == 2:
-        if design.measurement_type in (WITHIN_SUBJECTS, MIXED):
-            → PAIRED_T      if outcome_is_normal
-            → WILCOXON_SIGNED_RANK  otherwise
-        else:  # BETWEEN_SUBJECTS
-            → WELCH_T       if outcome_is_normal      # Welch is always the default (resolution #3)
-            → MANN_WHITNEY_U  otherwise
-
-    elif n_groups >= 3:
-        → ONE_WAY_ANOVA   if outcome_is_normal
-        → KRUSKAL_WALLIS  otherwise
-
-if outcome is BINARY or CATEGORICAL:
-    if design has a paired/within-subjects binary outcome:
-        → MCNEMAR
-    else:
-        if 2×2 contingency table:
-            if all expected cell counts ≥ 5:   → CHI_SQUARED
-            else:                               → FISHER_EXACT
-        else (R×C table):
-            → CHI_SQUARED   (with Cramér's V effect size)
+```python
+def prefer_rank_based(outcome_type, n_min, nonnormality) -> bool:
+    if outcome_type == ORDINAL:   # scale of measurement, not a normality question
+        return True
+    if n_min >= LARGE_N:          # CLT: the sampling distribution of the mean is ~normal
+        return False
+    return nonnormality == STRONG # at small N, only a *strong* departure switches to rank-based
 ```
 
-**Normality helper** (`_is_normal(var: Variable) -> bool`):  
-`is_normal = True` only when all of:
-- `var.normality.is_normal is True`
-- `abs(var.distribution_stats.skewness) < 2.0`
-- `abs(var.distribution_stats.kurtosis) < 7.0`
-- `var.n_observations >= 20`
+### Decision tree (full, mirrors §6.2)
 
-This is the "soft signal" resolution of design review note #1.
+```
+# === CONTINUOUS or ORDINAL outcome ===
+if outcome_type in (CONTINUOUS, ORDINAL):
+
+    if n_groups == 2:
+        if measurement == WITHIN:                       # paired / repeated measures
+            → WILCOXON_SIGNED_RANK  if prefer_rank_based(...)  else  PAIRED_T
+        else:                                           # between-subjects
+            if prefer_rank_based(...):  → MANN_WHITNEY_U
+            elif force_student:         → INDEPENDENT_T      # explicit override only
+            else:                       → WELCH_T            # DEFAULT — no variance pretest
+
+    elif n_groups >= 3:                                 # between-subjects omnibus
+        if prefer_rank_based(...):  → KRUSKAL_WALLIS         # post-hoc: Dunn + Holm
+        elif force_student:         → ONE_WAY_ANOVA          # pooled; post-hoc: Tukey HSD
+        else:                       → WELCH_ANOVA            # DEFAULT; post-hoc: Games–Howell
+
+    else:                                               # no grouping var → association of two cont./ord. vars
+        if relationship == NONLINEAR:                              → MAXBET (default) / BEAST (override)
+        elif relationship == MONOTONE or outcome_type == ORDINAL:  → SPEARMAN_CORRELATION
+        else:                                                      # LINEAR expected
+            if n_min < LARGE_N and nonnormality == STRONG:         → SPEARMAN_CORRELATION
+            else:                                                  → PEARSON_CORRELATION
+
+# === BINARY or CATEGORICAL outcome ===
+if outcome_type in (BINARY, CATEGORICAL):
+    if measurement == WITHIN and table_shape == TWO_BY_TWO:        → MCNEMAR        # paired binary
+    elif min_expected >= 5:                                        → CHI_SQUARED
+    else:                                                          → FISHER_EXACT   # 2×2: exact;
+                                                                                    # R×C: Fisher–Freeman–Halton
+```
+
+`BEAST` is in the enum but selectable only via explicit override; `INDEPENDENT_T` / `ONE_WAY_ANOVA` are reachable only via `force_student`.
 
 ### `tests/test_selector.py` — required cases
 
@@ -317,24 +331,29 @@ One test per test type + edge cases:
 
 | Test | Profile / Design setup | Expected result |
 |---|---|---|
-| `test_select_welch_t` | 2 groups, normal, between | `WELCH_T` |
-| `test_select_mann_whitney` | 2 groups, non-normal, between | `MANN_WHITNEY_U` |
-| `test_select_paired_t` | 2 groups, normal, within | `PAIRED_T` |
-| `test_select_wilcoxon` | 2 groups, non-normal, within | `WILCOXON_SIGNED_RANK` |
-| `test_select_anova` | 3 groups, normal | `ONE_WAY_ANOVA` |
-| `test_select_kruskal` | 3 groups, non-normal | `KRUSKAL_WALLIS` |
-| `test_select_pearson` | 1 group, 2 continuous, linear note, both normal | `PEARSON_CORRELATION` |
-| `test_select_spearman` | 1 group, 2 continuous, monotone, non-normal | `SPEARMAN_CORRELATION` |
+| `test_select_welch_t` | 2 groups, between, `nonnormality=NONE`, large N | `WELCH_T` |
+| `test_select_independent_t_override` | 2 groups, between, `force_student=True` | `INDEPENDENT_T` |
+| `test_select_mann_whitney` | 2 groups, between, small N, `nonnormality=STRONG` | `MANN_WHITNEY_U` |
+| `test_select_paired_t` | 2 groups, within, `nonnormality=NONE` | `PAIRED_T` |
+| `test_select_wilcoxon` | 2 groups, within, small N, `nonnormality=STRONG` | `WILCOXON_SIGNED_RANK` |
+| `test_select_welch_anova` | 3 groups, between, parametric | `WELCH_ANOVA` |
+| `test_select_one_way_anova_override` | 3 groups, between, `force_student=True` | `ONE_WAY_ANOVA` |
+| `test_select_kruskal` | 3 groups, small N, `nonnormality=STRONG` | `KRUSKAL_WALLIS` |
+| `test_select_pearson` | 1 group, 2 continuous, linear note, `nonnormality=NONE` | `PEARSON_CORRELATION` |
+| `test_select_spearman_monotone` | 1 group, 2 continuous, monotone note | `SPEARMAN_CORRELATION` |
+| `test_select_spearman_ordinal` | 1 group, ordinal outcome (no grouping) | `SPEARMAN_CORRELATION` |
 | `test_select_maxbet` | 1 group, 2 continuous, nonlinear note | `MAXBET` |
-| `test_select_chi_squared_2x2` | 2 categorical, expected counts ≥ 5 | `CHI_SQUARED` |
-| `test_select_fisher_exact` | 2×2 categorical, small expected counts | `FISHER_EXACT` |
-| `test_select_chi_squared_rxc` | 3×4 categorical table | `CHI_SQUARED` |
-| `test_select_mcnemar` | Paired binary | `MCNEMAR` |
-| `test_normality_soft_signal` | `is_normal=True` but skewness=3.0 → treated as non-normal | `MANN_WHITNEY_U` |
+| `test_select_chi_squared_2x2` | 2 categorical, `min_expected ≥ 5` | `CHI_SQUARED` |
+| `test_select_fisher_exact` | 2×2 categorical, `min_expected < 5` | `FISHER_EXACT` |
+| `test_select_chi_squared_rxc` | 3×4 categorical table, `min_expected ≥ 5` | `CHI_SQUARED` |
+| `test_select_mcnemar` | Paired binary, 2×2 within | `MCNEMAR` |
+| `test_ordinal_prefers_rank` | Ordinal outcome, 2 groups → `prefer_rank_based` True regardless of severity | `MANN_WHITNEY_U` |
+| `test_large_n_overrides_strong_departure` | 2 groups, between, `nonnormality=STRONG` but `n_min ≥ LARGE_N` → CLT → parametric | `WELCH_T` |
+| `test_small_n_mild_stays_parametric` | 2 groups, between, small N, `nonnormality=MILD` (not STRONG) | `WELCH_T` |
 | `test_rationale_string` | Any test → `get_selection_rationale` returns non-empty string |
 | `test_publishes_event` | `EVENT_TEST_SELECTED` fired with correct payload |
 
-**Gate:** `pytest tests/test_selector.py` → 16 passing, 0 failing.  
+**Gate:** `pytest tests/test_selector.py` → 21 passing, 0 failing.  
 > **Statistician review checkpoint** — Statistician A signs off on the full decision tree before Step 6 begins.
 
 ---
@@ -366,23 +385,25 @@ class TestExecutor:
 
 | Test | Library | Effect size | Assumption checks |
 |---|---|---|---|
-| `WELCH_T` | `scipy.stats.ttest_ind(equal_var=False)` | Cohen's d (pooled SD); bootstrap 95% CI (n=1000) | Normality (Shapiro-Wilk), min N ≥ 5 per group |
-| `INDEPENDENT_T` | `scipy.stats.ttest_ind(equal_var=True)` | Cohen's d | Normality, equal variances (Levene) |
+| `WELCH_T` | `scipy.stats.ttest_ind(equal_var=False)` | Cohen's d (pooled SD); bootstrap 95% CI (n=1000) | Normality (Shapiro-Wilk, diagnostic), min N ≥ 5 per group. **No Levene** — Welch never assumes equal variances. |
+| `INDEPENDENT_T` | `scipy.stats.ttest_ind(equal_var=True)` (override only) | Cohen's d | Normality, equal variances (Levene) — relevant only because this is the explicit equal-variance override |
 | `PAIRED_T` | `scipy.stats.ttest_rel` | Cohen's d_z (within-subject SD) | Normality of differences |
 | `MANN_WHITNEY_U` | `scipy.stats.mannwhitneyu` | Rank-biserial r = `(2U)/(n₁n₂) − 1`; bootstrap CI | Min N ≥ 5 per group |
 | `WILCOXON_SIGNED_RANK` | `scipy.stats.wilcoxon` | Matched-pairs rank-biserial r; bootstrap CI | N ≥ 10 pairs |
-| `ONE_WAY_ANOVA` | `scipy.stats.f_oneway` | η² = SS_between/SS_total; ω² = (SS_b − df_b·MS_w)/(SS_t + MS_w) | Normality per group, Levene; post-hoc: Tukey HSD (`pingouin.pairwise_tukey`) |
+| `WELCH_ANOVA` | `pingouin.welch_anova` | η² and ω² (from Welch-adjusted SS; equal variances **not** assumed) | Normality per group (diagnostic); **no Levene**. Post-hoc: Games–Howell (`pingouin.pairwise_gameshowell`), Holm-adjusted |
+| `ONE_WAY_ANOVA` | `scipy.stats.f_oneway` (override only) | η² = SS_between/SS_total; ω² = (SS_b − df_b·MS_w)/(SS_t + MS_w) | Normality per group, equal variances (Levene); post-hoc: Tukey HSD (`pingouin.pairwise_tukey`) |
 | `KRUSKAL_WALLIS` | `scipy.stats.kruskal` | ε² = (H − k + 1)/(n − k); bootstrap CI | Min N ≥ 5 per group; post-hoc: Dunn's test + Holm (`scikit_posthocs.posthoc_dunn`) |
-| `CHI_SQUARED` | `scipy.stats.chi2_contingency` | Cramér's V = `√(χ²/(n·min(r−1,c−1)))`; bootstrap CI | Expected cell count ≥ 5 (flag VIOLATED if any < 5) |
-| `FISHER_EXACT` | `scipy.stats.fisher_exact` | Odds ratio; 95% CI via Baptista–Pike method | 2×2 only (raise `ValueError` if not) |
+| `CHI_SQUARED` | `scipy.stats.chi2_contingency` | **By `table_shape`:** R×C → Cramér's V = `√(χ²/(n·min(r−1,c−1)))`; 2×2 → Cramér's V **plus** odds ratio (and φ). Bootstrap CI | Expected cell count ≥ 5 (flag VIOLATED if any < 5) |
+| `FISHER_EXACT` | `scipy.stats.fisher_exact` (2×2); `scipy.stats.fisher_exact`/R Fisher–Freeman–Halton (R×C) | **By `table_shape`:** 2×2 → odds ratio, 95% CI via Baptista–Pike; R×C → Cramér's V (OR undefined) | No expected-count floor needed; R×C uses the Fisher–Freeman–Halton generalisation |
 | `MCNEMAR` | `statsmodels.stats.contingency_tables.mcnemar` | Odds ratio of discordant pairs; bootstrap CI | Paired structure, ≥ 25 discordant pairs |
-| `PEARSON_CORRELATION` | `scipy.stats.pearsonr` | r is its own effect size; Fisher's z 95% CI | Bivariate normality (Shapiro-Wilk on both) |
+| `PEARSON_CORRELATION` | `scipy.stats.pearsonr` | r is its own effect size; Fisher's z 95% CI | Bivariate normality (Shapiro-Wilk on both, diagnostic) |
 | `SPEARMAN_CORRELATION` | `scipy.stats.spearmanr` | ρ is its own effect size; bootstrap CI (n=1000) | Continuity (no ties > 5%) |
 | `MAXBET` | `rpy2` → R `BET::MaxBET` | BET symmetry statistic + depth; normalised MI as supplementary | Continuity, N ≥ 20, depth ≤ ⌊log₂(N)⌋ |
-| `BEAST` | not selectable in v0.1.0 (enum reserved for v0.2.0) | — | — |
-| `BET` | not selectable in v0.1.0 (enum reserved for v0.2.0) | — | — |
+| `BEAST` | `rpy2` → R `BET::BEAST` (reachable via explicit override only) | BET symmetry statistic + depth; normalised MI as supplementary | Continuity, N ≥ 20, depth ≤ ⌊log₂(N)⌋ |
 | `LINEAR_REGRESSION` | — | — | Raises `NotImplementedError("planned for v0.2.0")` |
 | `LOGISTIC_REGRESSION` | — | — | Raises `NotImplementedError("planned for v0.2.0")` |
+
+> No single-depth `BET` member exists in the enum (it is not reachable from the §6 tree). The BET family is `MAXBET` (default) and `BEAST` (override).
 
 ### Power reporting
 
@@ -412,21 +433,24 @@ def _run_rbet(
 | `test_mann_whitney_known` | Verified against R `wilcox.test` |
 | `test_paired_t_known` | Verified against R `t.test(paired=TRUE)` |
 | `test_wilcoxon_known` | Verified against R `wilcox.test(paired=TRUE)` |
-| `test_anova_known` | Verified against R `aov` + `TukeyHSD` |
+| `test_welch_anova_known` | Verified against R `oneway.test(var.equal=FALSE)` + Games–Howell |
+| `test_anova_known` | Verified against R `aov` + `TukeyHSD` (`force_student` override path) |
 | `test_kruskal_known` | Verified against R `kruskal.test` + Dunn |
-| `test_chi_squared_known` | Verified against R `chisq.test` |
-| `test_fisher_exact_known` | Verified against R `fisher.test` |
+| `test_chi_squared_rxc_known` | R×C: verified against R `chisq.test`; effect size = Cramér's V |
+| `test_chi_squared_2x2_odds_ratio` | 2×2 χ²: reports Cramér's V **and** odds ratio (+ φ) |
+| `test_fisher_exact_2x2_known` | 2×2: verified against R `fisher.test`; effect size = odds ratio |
+| `test_fisher_rxc_cramers_v` | R×C: Fisher–Freeman–Halton path; effect size = Cramér's V (OR undefined) |
 | `test_mcnemar_known` | Verified against R `mcnemar.test` |
 | `test_pearson_known` | Verified against R `cor.test(method="pearson")` |
 | `test_spearman_known` | Verified against R `cor.test(method="spearman")` |
 | `test_maxbet_known` | `pytest.mark.skipif(no rpy2)` — verified against R `BET::MaxBET` |
 | `test_assumption_violations_flagged` | Non-normal data → `AssumptionStatus.VIOLATED` in checks |
-| `test_posthoc_in_notes` | ANOVA result → Tukey table string in `TestResult.notes` |
+| `test_posthoc_in_notes` | `WELCH_ANOVA` result → Games–Howell (Holm) table string in `TestResult.notes` |
 | `test_sensitivity_power_in_notes` | WELCH_T result → sensitivity MDE in `TestResult.notes` |
 | `test_linear_regression_not_implemented` | Raises `NotImplementedError` |
 | `test_publishes_event` | `EVENT_TEST_EXECUTED` fired with correct payload |
 
-**Gate:** `pytest tests/test_executor.py` → 17 passing (BET test may be skipped if R absent), 0 failing.
+**Gate:** `pytest tests/test_executor.py` → 20 passing (BET/MaxBET test may be skipped if R absent), 0 failing.
 
 ---
 
