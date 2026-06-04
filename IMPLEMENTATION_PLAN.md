@@ -501,8 +501,8 @@ One test per test type + edge cases:
 | `test_select_cox` | TIME_TO_EVENT outcome, covariate adjustment / continuous exposure | `COX_REGRESSION` |
 | `test_select_roc_auc` | Continuous index vs BINARY reference (diagnostic) | `ROC_AUC` |
 | `test_count_dispatch_precedes_continuous` | COUNT outcome never routed to a t-test/ANOVA | not `WELCH_T` |
-| `test_rationale_string` | Any test → `get_selection_rationale` returns non-empty string |
-| `test_publishes_event` | `EVENT_TEST_SELECTED` fired with correct payload |
+| `test_rationale_string` | Any test → `get_selection_rationale` returns non-empty string | non-empty string |
+| `test_publishes_event` | `EVENT_TEST_SELECTED` fired with correct payload | event payload |
 
 **Gate:** `pytest tests/test_selector.py` → 29 passing, 0 failing.  
 > **Statistician review checkpoint** — Statistician A signs off on the full decision tree before Step 6 begins.

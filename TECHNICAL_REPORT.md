@@ -757,11 +757,11 @@ These constraints apply to every step without exception.
 | `src/hta/__init__.py` | Package root with version |
 | `src/hta/models/data.py` | `VariableType`, `DistributionStats`, `NormalityTest`, `Variable`, `DataProfile` |
 | `src/hta/models/design.py` | `StudyDesignType`, `MeasurementType`, `VariableRole`, `Confounder`, `StudyDesign`, `CausalGraph` |
-| `src/hta/models/test.py` | `StatisticalTest` (14 members), `AssumptionStatus`, `AssumptionCheck`, `EffectSize`, `TestResult` |
+| `src/hta/models/test.py` | `StatisticalTest` (14 members at Step 1; 24 now — see §4.3), `AssumptionStatus`, `AssumptionCheck`, `EffectSize`, `TestResult` |
 | `src/hta/models/report.py` | `CaveatSeverity`, `Caveat`, `PlotSpec`, `Report` |
 | `src/hta/models/__init__.py` | Re-exports all models |
 | `tests/conftest.py` | Shared fixtures for all model types |
-| `tests/test_models.py` | 68 tests across 3 categories (see below) |
+| `tests/test_models.py` | 68 tests across 4 categories (see below) |
 
 **Test results:**
 
@@ -1020,4 +1020,4 @@ hta run --data data.csv --hypothesis "Group A < Group B" --group group --outcome
 
 ---
 
-*This document is updated at the end of each completed step. Last updated 2026-06-01: added BET (Binary Expansion Testing) integration — §6 decision tree extended with BET/MaxBET/BEAST branch, BET methodology note added (algorithm, variants, assumptions, assumption checks, rpy2 implementation sketch), §4.3 enum count updated (14→17), §5.2 DesignDialogue rule 7 added, §5.5 executor updated, Steps 5/6 planned-work requirements updated, §12 R+rpy2 setup added. Previous update 2026-05-29: §10b Design Review Notes and Cramér's V fix.*
+*This document is updated at the end of each completed step. Last updated 2026-06-04: (1) reconciled the test-selector decision tree to the stated policy — Welch's t / Welch's ANOVA as unconditional defaults with no Levene pretest, normality as a graded NONE/MILD/STRONG signal, no formal normality test above N=2000 (§6.1–§6.4); (2) general data-form coverage specialized for healthcare — `VariableType` 4→9 (COUNT, TIME_TO_EVENT, DATETIME, GEOSPATIAL, IDENTIFIER), `StatisticalTest` 17→24 (Poisson/negative-binomial, log-rank/Cox, ROC-AUC selectable; mixed-model/GEE reserved), `StudyDesign.reporting_standard`, healthcare branches and caveat catalog (§6.5–§6.7); (3) BET pairwise nonlinear-dependence EDA screen as the profiler's discovery stage (§5.1a) with `DependenceForm`/`DependenceFinding` models, citing Xiang et al. (2023), Ann. Appl. Stat. 17(4), DOI 10.1214/23-AOAS1745; (4) synthetic NC overdose/clinic-access demo dataset and clinic-density heatmap renderer. Earlier 2026-06-01: BET/MaxBET/BEAST integration and §4.3 enum count 14→17. Earlier 2026-05-29: §10b Design Review Notes and Cramér's V fix.*
