@@ -10,9 +10,9 @@ interface Props {
 }
 
 const EXAMPLES = [
+  'Counties with more OUD treatment clinics have lower nonfatal overdose ED visit rates',
   'Treatment group has lower blood pressure than control',
-  'Before-and-after scores differ significantly',
-  'Association between age and recovery time',
+  'Association between clinic density and overdose ED rate',
 ]
 
 const TYPE_COLOURS: Record<VariableType, string> = {

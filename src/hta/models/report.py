@@ -32,7 +32,8 @@ class PlotSpec(BaseModel):
     """Declarative specification for a plot; actual rendering is handled separately.
 
     data holds the raw values needed to produce the plot (e.g. group arrays,
-    x/y vectors). plot_type examples: "histogram", "boxplot", "scatter", "qqplot".
+    x/y vectors, or a 2-D z grid). plot_type examples: "histogram", "boxplot",
+    "scatter", "qqplot", "heatmap" (z grid with optional x/y bin centers).
     """
 
     plot_type: str

@@ -68,6 +68,27 @@ def plotspec_to_plotly(spec: dict[str, Any]) -> dict[str, Any]:
             "layout": layout,
         }
 
+    if plot_type == "heatmap":
+        # Geographic / 2-D density field. `z` is a 2-D array of values; `x` and `y`
+        # are the (optional) bin-center coordinates. Used for the clinic-density
+        # heatmap (clinics per 100k across a lat/long grid).
+        heat_layout = {**layout}
+        # Keep geographic aspect roughly square so the map isn't badly distorted.
+        heat_layout["yaxis"] = {**heat_layout.get("yaxis", {}), "scaleanchor": "x"}
+        heat_layout["showlegend"] = False
+        return {
+            "data": [{
+                "type": "heatmap",
+                "x": data_raw.get("x", []),
+                "y": data_raw.get("y", []),
+                "z": data_raw.get("z", []),
+                "colorscale": data_raw.get("colorscale", "YlOrRd"),
+                "colorbar": {"title": data_raw.get("colorbar_title", "")},
+                "hoverongaps": False,
+            }],
+            "layout": heat_layout,
+        }
+
     if plot_type == "qqplot":
         theoretical = data_raw.get("theoretical", [])
         sample = data_raw.get("sample", [])

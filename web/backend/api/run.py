@@ -31,7 +31,7 @@ async def _run_dry_run(session_id: str) -> object:
     """Yield SSE progress events then the stub report."""
     stages = [
         ("selecting_test", "Selecting statistical test…"),
-        ("executing_test",  "Running Welch's t-test…"),
+        ("executing_test",  "Computing Spearman rank correlation…"),
         ("generating_report", "Generating report…"),
     ]
     for stage, msg in stages:

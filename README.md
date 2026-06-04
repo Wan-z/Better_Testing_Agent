@@ -33,7 +33,8 @@ All modules share Pydantic models (`src/hta/models/`) as a lingua franca.
 | Mann–Whitney U | Non-normal / ordinal, 2 groups |
 | Paired t-test | Within-subjects, continuous |
 | Wilcoxon signed-rank | Within-subjects, non-normal |
-| One-way ANOVA | Continuous, ≥ 3 groups |
+| Welch's ANOVA | Continuous, ≥ 3 groups (default; no equal-variance assumption) |
+| One-way ANOVA | Continuous, ≥ 3 groups (equal-variance, explicit override) |
 | Kruskal–Wallis | Non-parametric, ≥ 3 groups |
 | Chi-squared | Categorical × categorical (expected ≥ 5) |
 | Fisher's exact | 2×2 contingency (expected < 5) |
@@ -144,20 +145,31 @@ web/
       types/        TypeScript types mirroring Pydantic models
   docker-compose.yml
   Dockerfile.backend / Dockerfile.frontend
+data/               Example dataset + generator (see data/README.md)
 tests/              pytest test suite
 TECHNICAL_REPORT.md Statistical methodology and design decisions
 IMPLEMENTATION_PLAN.md Step-by-step build guide
 ```
 
+## Example dataset
+
+[`data/overdose_ed_visits.csv`](data/README.md) is a **synthetic** NC county dataset
+(100 counties) for demonstrating the agent on a public-health question: *is OUD treatment
+clinic density associated with the nonfatal overdose ED visit rate?* It drives the dry-run
+web demo, which selects **Spearman's correlation** (ρ ≈ −0.67) and renders a
+**clinic-density heatmap** alongside the scatter plot. Values are simulated for
+demonstration only — not real surveillance data. Regenerate with
+`python data/generate_dataset.py`.
+
 ## Design decisions
 
 Key choices are documented in [`TECHNICAL_REPORT.md`](TECHNICAL_REPORT.md):
 
-- **Welch's t-test as unconditional default** — no equal-variance pre-test
-- **Anderson-Darling at N > 2 000** (Shapiro-Wilk below that threshold)
-- **Normality as soft signal** — informs but does not gate test selection
-- **MaxBET** for nonlinear independence testing (BEAST deferred to v0.2)
-- **Always-on post-hoc** — Tukey HSD / Dunn with Holm correction
+- **Welch's t-test / Welch's ANOVA as unconditional defaults** — no equal-variance pre-test
+- **No formal normality test above N = 2 000** — Shapiro-Wilk corroborates below that; above it, severity comes from skew/kurtosis magnitude (a one-sample KS/Shapiro vs estimated parameters is invalid there)
+- **Normality as a graded signal** (`NONE`/`MILD`/`STRONG`) — informs but does not gate test selection
+- **MaxBET** for nonlinear independence testing (BEAST reachable via explicit override)
+- **Always-on post-hoc, Holm-adjusted** — Games–Howell (Welch ANOVA) / Tukey HSD (pooled ANOVA) / Dunn (Kruskal–Wallis)
 - **Effect sizes with bootstrap CIs** on every result
 
 ## Contributing
