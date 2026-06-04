@@ -40,6 +40,46 @@ class VariableType(str, Enum):
     IDENTIFIER = "IDENTIFIER"
 
 
+class DependenceForm(str, Enum):
+    """Form of pairwise dependence read from the dominant BET Binary Interaction
+    Design (arXiv:2202.09880). Maps to the selector's relationship signal:
+    LINEAR/MONOTONE stay parametric/rank; the rest are nonlinear (→ MaxBET) and the
+    mixture-type forms often signal latent subgroups (CHECKERBOARD/SINUSOIDAL/PARABOLIC).
+    """
+
+    LINEAR = "LINEAR"
+    MONOTONE = "MONOTONE"
+    PARABOLIC = "PARABOLIC"
+    SINUSOIDAL = "SINUSOIDAL"
+    CHECKERBOARD = "CHECKERBOARD"
+    COMPLEX = "COMPLEX"
+    INDEPENDENT = "INDEPENDENT"
+
+
+class DependenceFinding(BaseModel):
+    """One pair from the BET exploratory dependence screen (DataProfiler EDA stage).
+
+    nonlinear_only is True when BET is significant but |Pearson| and |Spearman| are
+    both small — dependence that linear methods miss, the key discovery in
+    arXiv:2202.09880. `form` and `direction` come from the dominant BID and the sign
+    of its symmetry statistic S.
+    """
+
+    x: str
+    y: str
+    n: int
+    bet_statistic_s: int
+    bet_z: float
+    p_value: float            # Bonferroni-adjusted (across BIDs and screened pairs)
+    bid: str                  # dominant BID label, e.g. "A1A2B1"
+    form: DependenceForm
+    direction: str            # "increasing" / "decreasing" / "none"
+    pearson_r: float
+    spearman_rho: float
+    nonlinear_only: bool
+    significant: bool
+
+
 class DistributionStats(BaseModel):
     """Descriptive statistics for a numeric variable."""
 
@@ -85,3 +125,5 @@ class DataProfile(BaseModel):
     group_variable: Optional[str] = None
     outcome_variable: Optional[str] = None
     notes: list[str] = Field(default_factory=list)
+    # Ranked output of the BET pairwise nonlinear-dependence screen (EDA stage).
+    nonlinear_dependencies: list[DependenceFinding] = Field(default_factory=list)

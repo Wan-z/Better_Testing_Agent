@@ -52,6 +52,10 @@ class StudyDesign(BaseModel):
     is_randomized: bool
     confounders: list[Confounder] = Field(default_factory=list)
     notes: list[str] = Field(default_factory=list)
+    # Subgroup / stratification variables (e.g. disease subtype, sex, site) elicited
+    # to explain nonlinear or mixture-type dependence found in the BET EDA screen.
+    # When present, the selector runs the test within strata (contextual analysis).
+    subgroup_variables: list[str] = Field(default_factory=list)
     # Applicable reporting guideline, derived from the design (EQUATOR network):
     # "CONSORT" (RCT), "STROBE" (observational), "STARD" (diagnostic accuracy),
     # "TRIPOD" (prediction model), "PRISMA" (systematic review). None if undetermined.

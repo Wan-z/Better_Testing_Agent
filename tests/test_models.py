@@ -11,7 +11,15 @@ import json
 import pytest
 from pydantic import ValidationError
 
-from hta.models.data import DataProfile, DistributionStats, NormalityTest, Variable, VariableType
+from hta.models.data import (
+    DataProfile,
+    DependenceFinding,
+    DependenceForm,
+    DistributionStats,
+    NormalityTest,
+    Variable,
+    VariableType,
+)
 from hta.models.design import (
     CausalGraph,
     Confounder,
@@ -43,6 +51,14 @@ class TestVariableTypeEnum:
         # Count/rate and survival outcomes are first-class, not coerced to CONTINUOUS.
         assert VariableType.COUNT == "COUNT"
         assert VariableType.TIME_TO_EVENT == "TIME_TO_EVENT"
+
+
+class TestDependenceFormEnum:
+    def test_all_values_exist(self) -> None:
+        assert {f.value for f in DependenceForm} == {
+            "LINEAR", "MONOTONE", "PARABOLIC", "SINUSOIDAL",
+            "CHECKERBOARD", "COMPLEX", "INDEPENDENT",
+        }
 
 
 class TestStudyDesignTypeEnum:
@@ -196,6 +212,31 @@ class TestDataProfile:
         assert dp.n_groups is None
         assert dp.group_variable is None
         assert dp.outcome_variable is None
+        assert dp.nonlinear_dependencies == []
+
+
+class TestDependenceFinding:
+    def _finding(self) -> DependenceFinding:
+        return DependenceFinding(
+            x="gene_a", y="gene_b", n=500, bet_statistic_s=-312, bet_z=13.95,
+            p_value=1e-30, bid="A1A2B1", form=DependenceForm.PARABOLIC,
+            direction="decreasing", pearson_r=-0.01, spearman_rho=0.08,
+            nonlinear_only=True, significant=True,
+        )
+
+    def test_construction(self) -> None:
+        f = self._finding()
+        assert f.form == DependenceForm.PARABOLIC
+        assert f.nonlinear_only is True
+
+    def test_round_trip(self) -> None:
+        f = self._finding()
+        restored = DependenceFinding.model_validate_json(f.model_dump_json())
+        assert restored == f
+
+    def test_carried_on_profile(self) -> None:
+        dp = DataProfile(variables=[], nonlinear_dependencies=[self._finding()])
+        assert dp.nonlinear_dependencies[0].form == DependenceForm.PARABOLIC
 
 
 class TestConfounder:
@@ -231,6 +272,7 @@ class TestStudyDesign:
         assert sd.confounders == []
         assert sd.notes == []
         assert sd.reporting_standard is None
+        assert sd.subgroup_variables == []
 
     def test_reporting_standard_round_trip(self) -> None:
         sd = StudyDesign(

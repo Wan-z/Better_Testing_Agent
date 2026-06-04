@@ -164,7 +164,9 @@ All shared data structures are defined in `src/hta/models/` as **Pydantic v2** m
 | `DistributionStats` | Descriptive statistics | mean, std, median, IQR, skewness, kurtosis, min, max |
 | `NormalityTest` | Formal normality test result | name, statistic, p_value, `is_normal` (p > 0.05) |
 | `Variable` | Single variable profile | name, type, n, n_missing, distribution_stats, normality, unique_values |
-| `DataProfile` | Full dataset profile | variables, n_groups, group_var, outcome_var, notes (quality flags) |
+| `DependenceForm` | Enum: BET dependence shape | `LINEAR`, `MONOTONE`, `PARABOLIC`, `SINUSOIDAL`, `CHECKERBOARD`, `COMPLEX`, `INDEPENDENT` (§5.1a) |
+| `DependenceFinding` | One BET-screened pair | x, y, bet_z, p_value, bid, form, direction, pearson_r, spearman_rho, nonlinear_only |
+| `DataProfile` | Full dataset profile | variables, n_groups, group_var, outcome_var, notes, nonlinear_dependencies (BET EDA) |
 
 ### 4.2 Design models (`models/design.py`)
 
@@ -174,7 +176,7 @@ All shared data structures are defined in `src/hta/models/` as **Pydantic v2** m
 | `MeasurementType` | Enum | `BETWEEN_SUBJECTS`, `WITHIN_SUBJECTS`, `MIXED` |
 | `VariableRole` | Enum: causal role | `CONFOUNDER`, `COLLIDER`, `MEDIATOR`, `EFFECT_MODIFIER`, `COVARIATE` |
 | `Confounder` | One causal variable | name, role, is_measured, adjustment_recommended, rationale |
-| `StudyDesign` | Captured study design | design_type, measurement_type, is_randomized, confounders, notes, reporting_standard (CONSORT/STROBE/STARD/TRIPOD/PRISMA — §6.6) |
+| `StudyDesign` | Captured study design | design_type, measurement_type, is_randomized, confounders, notes, subgroup_variables (stratify/effect-modifier — §5.1a/§7.2), reporting_standard (§6.6) |
 | `CausalGraph` | DAG structure | nodes, edges (ordered pairs), adjustment_set, warnings |
 
 ### 4.3 Test models (`models/test.py`)
@@ -222,11 +224,43 @@ TestResult ───────────────────────
 **Outputs:** `DataProfile` (published as `EVENT_DATA_PROFILED`)
 
 Responsibilities:
-- Infer variable type: BINARY (2 unique), CATEGORICAL (≤20 unique, non-numeric), ORDINAL (numeric, ≤10 unique), CONTINUOUS (else)
-- Normality testing: Shapiro-Wilk for N ≤ 2000; Kolmogorov-Smirnov for N > 2000
+- Infer variable type (healthcare-aware, §6.5): structural roles (IDENTIFIER, DATETIME, GEOSPATIAL) first; then BINARY, COUNT, TIME_TO_EVENT, CATEGORICAL, ORDINAL, CONTINUOUS
+- Normality *severity* (§6.1): Shapiro-Wilk corroboration at N ≤ 2000; skew/kurtosis magnitude above that
 - Compute all `DistributionStats` fields
-- Flag data quality issues: >5% missingness, constant variables, outliers (|Z| > 3.5)
+- Flag data quality issues: >5% missingness, constant variables, outliers (|Z| > 3.5), and **tie / zero-inflation severity** (matters for the copula-based dependence screen below)
 - Group-level statistics when a group variable is specified
+- **Exploratory dependence screen (BET)** — see §5.1a: scan numeric pairs for dependence (especially nonlinear), label its form, and flag nonlinear-only pairs
+
+#### 5.1a Exploratory dependence analysis — BET pairwise screen
+
+Following **arXiv:2202.09880** (Xiang, Zhang, …, Zhang & Marron — *Pairwise Nonlinear
+Dependence Analysis of Genomic Data*), the profiler runs a deterministic EDA pass over the
+CONTINUOUS/COUNT/ORDINAL columns *before* any test is selected, implemented in
+`hta/bet_screen.py` (pure-stdlib, no R/numpy needed for the depth-2 screen):
+
+1. **Copula transform** — each variable is mapped to the empirical copula on (0, 1] by
+   rank, making the analysis marginal-free and outlier-robust.
+2. **Tie / discreteness handling** — piled-up values (zeros, imputed values, detection
+   limits — pervasive in healthcare data) break BET's continuity assumption, so tied
+   observations are **jittered** by a tiny deterministic amount before ranking (paper §3.1).
+   The tie fraction is recorded as a data-quality note.
+3. **MaxBET at depth d = 2** — for every pair, the nine Binary Interaction Designs (BIDs)
+   are scored by their symmetry statistic `S`; the strongest |S| is taken, Bonferroni-adjusted
+   across the 9 BIDs and across all screened pairs (the paper's two-level adjustment).
+4. **Form + direction** — the dominant BID labels the *form* of dependence
+   (`DependenceForm`: MONOTONE, PARABOLIC, SINUSOIDAL/"W"-bimodal, CHECKERBOARD, LINEAR,
+   COMPLEX) and the sign of `S` gives the direction. This interpretability is BET's advantage
+   over a single correlation coefficient.
+5. **Nonlinear-only flag** — a pair that is BET-significant while |Pearson| and |Spearman|
+   are both small is flagged `nonlinear_only`. This is the paper's headline: much real
+   dependence is invisible to linear methods.
+
+Each pair becomes a `DependenceFinding` on `DataProfile.nonlinear_dependencies` (ranked by
+BET `Z`). These feed two downstream consumers: the **dialogue** (a nonlinear/mixture-type
+finding triggers the subgroup question, §7.2 Rule 8) and the **selector** (the dominant form
+becomes the `relationship` prior, §6.2). Mixture-type forms (CHECKERBOARD/SINUSOIDAL/
+PARABOLIC) are the paper's *subtype-driven* patterns — the EDA's signal that latent subgroups
+may explain the dependence.
 
 ### 5.2 DesignDialogue (`modules/dialogue.py`) — Step 4
 
@@ -236,6 +270,11 @@ Responsibilities:
 Responsibilities:
 - Multi-turn dialogue with the user, powered by **GPT-5.4 via Azure OpenAI**
 - Enforces a structured protocol (see §7.1)
+- **Surfaces the BET EDA findings** (top nonlinear pairs + their form) as context, and when a
+  nonlinear / mixture-type dependence is present asks whether known **subgroups/subtypes**
+  (e.g. disease subtype, sex, site) explain it — captured as `StudyDesign.subgroup_variables`
+  (§7.2 Rule 8). This operationalises the paper's "explain nonlinear dependence by subtype"
+  step and fills the effect-modification gap.
 - Terminates when the model calls the `capture_study_design` tool with enough information
 - Returns a pre-defined `StudyDesign` in `dry_run=True` mode
 
@@ -257,6 +296,13 @@ Responsibilities:
 Responsibilities:
 - Purely deterministic decision tree — **no LLM calls**
 - Returns the appropriate test based on outcome type, number of groups, measurement type, and normality
+- **Sources the `relationship` signal from the BET EDA** (`DataProfile.nonlinear_dependencies`)
+  for the outcome/predictor pair — the dominant `DependenceForm` maps to linear/monotone/
+  nonlinear (§6.2), so a nonlinear shape routes to MaxBET even if the user said "linear"
+- **Stratified / contextual routing**: when `StudyDesign.subgroup_variables` is non-empty (a
+  subtype-driven pattern was identified), selects the per-stratum test and records that a
+  within-subgroup (contextual) analysis is run — mirroring the paper's four breast-cancer
+  contexts. A formal interaction model is reserved for v0.2.0
 - Provides a human-readable `get_selection_rationale()` explaining the choice
 - Statistician Reviewer A will validate this decision tree
 
@@ -305,7 +351,7 @@ The test-selection decision tree, implemented in `selector.py`. This is the prim
 
 - `outcome_type` ∈ {CONTINUOUS, ORDINAL, BINARY, CATEGORICAL}
 - `n_groups`, `measurement` ∈ {BETWEEN, WITHIN (paired/repeated)}, `n_min` — smallest per-group (or per-pair) sample size
-- `relationship` ∈ {LINEAR, MONOTONE, NONLINEAR} — correlation analyses only; from `StudyDesign.notes` (DesignDialogue rule 7)
+- `relationship` ∈ {LINEAR, MONOTONE, NONLINEAR} — correlation analyses only. **Primary source: the BET EDA** — the dominant `DependenceForm` of the outcome/predictor pair in `DataProfile.nonlinear_dependencies` (§5.1a) maps via `relationship_form()` (LINEAR→linear, MONOTONE→monotone, PARABOLIC/SINUSOIDAL/CHECKERBOARD/COMPLEX→nonlinear). Falls back to `StudyDesign.notes` (DesignDialogue rule 7) if the pair was not screened
 - `table_shape` ∈ {TWO_BY_TWO, RxC} and `min_expected` (smallest expected cell count) — categorical outcomes only
 - `nonnormality` ∈ {NONE, MILD, STRONG} — *severity*, derived from robust descriptors and corroborated by Shapiro–Wilk **only at N ≤ 2 000**. Above N = 2 000 no formal normality test is run — the previous one-sample KS-vs-estimated-parameters path is statistically invalid (it needs Lilliefors) and flags essentially every real dataset, so it is uninformative for selection (resolves correctness issue #2). Severity at large N is judged from skew/kurtosis magnitude alone:
   - `NONE`: |skew| < 1 and |excess kurtosis| < 2
@@ -649,7 +695,17 @@ The system prompt given to GPT-5.4 enforces the following dialogue rules:
 
 **Tool use:** The dialogue module defines a `capture_study_design` function tool in the OpenAI tool-calling format. When GPT-5.4 calls this tool, the module extracts the structured `StudyDesign` from the tool arguments and terminates the loop.
 
-Rule 7 (added for BET support): When the user's hypothesis involves association or dependence between two continuous variables, ask: *"Do you expect the relationship to be linear, monotone, or potentially nonlinear/complex?"* The answer is stored in `StudyDesign.notes` and used by the selector to choose between Pearson, Spearman, and BET (see §6).
+Rule 7 (added for BET support): When the user's hypothesis involves association or dependence between two continuous variables, ask: *"Do you expect the relationship to be linear, monotone, or potentially nonlinear/complex?"* The answer is stored in `StudyDesign.notes` and used by the selector to choose between Pearson, Spearman, and BET (see §6). The BET EDA screen (§5.1a) pre-fills the likely answer from the data, so the question is framed as a confirmation.
+
+Rule 8 (added for the EDA subgroup step, arXiv:2202.09880): When the BET screen flags the
+outcome/predictor pair as **nonlinear** — especially a mixture-type form (CHECKERBOARD,
+SINUSOIDAL/"W"-bimodal, or PARABOLIC), or a `nonlinear_only` pair — present that finding and
+ask: *"This pattern is often produced by a mix of subgroups. Are there known subgroups or
+subtypes in your data (e.g. disease subtype, sex, site) that might drive it?"* Named subgroups
+are stored in `StudyDesign.subgroup_variables`; the selector then runs the analysis **within
+each subgroup** (contextual analysis) and the report compares the strata. This is how the
+paper explains TCGA nonlinear gene dependence by breast-cancer subtype, and it gives the agent
+a concrete effect-modification / heterogeneity step.
 
 ### 7.3 Reporter text generation
 

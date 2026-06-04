@@ -72,6 +72,18 @@ note statistical-vs-clinical significance (MCID), map the design to a reporting 
 non-proportional hazards, informative censoring, prevalence-dependence). See
 [`TECHNICAL_REPORT.md` §6.5–§6.7](TECHNICAL_REPORT.md).
 
+### Exploratory dependence analysis (BET)
+
+Before any test is chosen, the profiler runs a **Binary Expansion Testing** screen
+(`src/hta/bet_screen.py`) over the numeric columns, following
+[Xiang, Zhang, …, Zhang & Marron (arXiv:2202.09880)](https://arxiv.org/abs/2202.09880). For
+every pair it copula-transforms the data (jittering ties / zero-inflation), runs depth-2
+MaxBET, and reports the **form** of dependence (monotone, parabolic, "W"-bimodal,
+checkerboard, linear) with its direction — flagging **nonlinear-only** pairs that Pearson and
+Spearman miss. Mixture-type forms prompt the dialogue to ask which **subgroups/subtypes** drive
+the pattern (captured for stratified analysis), and the dominant form becomes the selector's
+relationship prior. This is the agent's effect-modification / heterogeneity step.
+
 ## Requirements
 
 - Python ≥ 3.11
@@ -157,6 +169,7 @@ mypy src/hta           # type checking
 src/hta/
   models/           Shared Pydantic data models
   bus.py            Pub/sub event bus
+  bet_screen.py     BET pairwise nonlinear-dependence EDA engine (pure stdlib)
   modules/          DataProfiler, DesignDialogue, TestSelector, TestExecutor, Reporter
   agent.py          Top-level orchestrator
   cli.py            Typer CLI

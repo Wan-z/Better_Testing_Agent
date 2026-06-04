@@ -75,6 +75,23 @@ Before coding begins, these open questions from §10b of the technical report ar
 
 ---
 
+## Step 1d — EDA dependence models ✅ DONE
+
+**Goal:** Carry the BET exploratory-dependence findings (arXiv:2202.09880) through the models.
+**Files touched:** `src/hta/models/data.py`, `src/hta/models/design.py`, `tests/test_models.py`
+
+- [x] **`DependenceForm`** enum (LINEAR, MONOTONE, PARABOLIC, SINUSOIDAL, CHECKERBOARD,
+  COMPLEX, INDEPENDENT) + **`DependenceFinding`** model (x, y, n, S, bet_z, p_value, bid,
+  form, direction, pearson_r, spearman_rho, nonlinear_only, significant).
+- [x] **`DataProfile.nonlinear_dependencies: list[DependenceFinding]`**.
+- [x] **`StudyDesign.subgroup_variables: list[str]`** (stratify / effect-modifier vars).
+- [x] **`tests/test_models.py`** — `DependenceForm` enum, `DependenceFinding` round-trip,
+  profile/design defaults.
+
+**Gate:** `pytest tests/test_models.py` → passing.
+
+---
+
 ## Step 2 — Event bus
 
 **Goal:** `src/hta/bus.py` — synchronous pub/sub with exception isolation.  
@@ -219,6 +236,57 @@ Severity thresholds (proposed defaults, pending Statistician A sign-off):
 
 **Gate:** `pytest tests/test_profiler.py` → 20 passing, 0 failing.
 
+> The profiler also runs the **BET EDA screen** (Step 3a) and attaches the ranked
+> `DependenceFinding`s to `DataProfile.nonlinear_dependencies`, plus a tie/zero-inflation
+> data-quality note when jittering was needed.
+
+---
+
+## Step 3a — BET exploratory dependence screen ✅ DONE (engine + tests)
+
+**Goal:** Implement the pairwise nonlinear-dependence EDA of **arXiv:2202.09880** as the
+profiler's discovery stage.
+**Files created:** `src/hta/bet_screen.py`, `tests/test_bet_screen.py`
+
+### `bet_screen.py` — public API
+
+```python
+def empirical_copula(values: list[float], rng: random.Random) -> list[float]: ...
+def maxbet(x: list[float], y: list[float], alpha=0.05, seed=0) -> PairDependence: ...
+def pairwise_screen(columns: dict[str, list[float]], alpha=0.05,
+                    max_pairs: int | None = None, seed=0) -> ScreenResult: ...
+def relationship_form(form: str) -> str:  # -> "linear" | "monotone" | "nonlinear"
+```
+
+- [x] Empirical-copula transform with **tie jitter** (deterministic, seeded) — handles
+  zero-inflation / imputed values that break BET's continuity assumption.
+- [x] Depth-2 MaxBET over the 9 BIDs; symmetry statistic `S`, `Z = |S|/√n`, two-level
+  Bonferroni (across BIDs and across screened pairs).
+- [x] Dominant-BID → `DependenceForm` + direction (sign of `S`); `nonlinear_only` flag when
+  BET-significant but |Pearson| and |Spearman| are both < 0.10.
+- [x] Pure standard library (no numpy/scipy/R) so the depth-2 screen runs anywhere; the
+  profiler wraps `PairDependence` into `DependenceFinding` models.
+
+### `tests/test_bet_screen.py` — required cases (all passing)
+
+| Test | Description |
+|---|---|
+| `test_monotone_increasing` | linear data → MONOTONE/LINEAR, increasing, Pearson high |
+| `test_monotone_decreasing_direction` | negative slope → direction `decreasing` |
+| `test_parabola_is_nonlinear_only` | y=x² → significant, Pearson≈0, `nonlinear_only`, nonlinear form |
+| `test_independence_not_significant` | independent → not significant, INDEPENDENT |
+| `test_tie_jitter_no_crash_and_valid_copula` | 50% tied zeros → valid distinct copula |
+| `test_pairwise_screen_ranks_and_flags` | screen sorts by Z; flags the nonlinear-only pair |
+| `test_z_matches_statistic` | `Z == |S|/√n` |
+
+**Gate:** `pytest tests/test_bet_screen.py` → 7 passing, 0 failing. *(Verified with a stdlib
+runner — the engine has no third-party deps.)*
+
+> **Note on the full d>2 / cross-all-pairs paper pipeline:** the v0.1.0 screen uses depth
+> d=2 (the paper's recommended resolution) and the pure-Python symmetry statistic. The R
+> `BET::MaxBET` path (Step 6 executor) remains the route for confirmatory BET with the
+> normalised-MI supplement; the EDA screen here is for fast discovery + interpretation.
+
 ---
 
 ## Step 4 — Study design dialogue and causal module
@@ -236,8 +304,10 @@ class DesignDialogue:
 
 - `dry_run=True`: returns a hard-coded `StudyDesign` without any API call.
 - `dry_run=False`: multi-turn GPT-5.4 loop; terminates when `capture_study_design` tool is called.
-- Implements all 7 dialogue rules from §7.2 (including Rule 7: relationship-form question).
+- Implements all 8 dialogue rules from §7.2 (Rule 7: relationship-form, pre-filled from the BET
+  EDA; Rule 8: subgroup elicitation when the BET screen flags a nonlinear / mixture-type pair).
 - `StudyDesign.notes` must contain `"nonlinear"` or `"complex"` when the user answers that way to Rule 7.
+- When Rule 8 fires and the user names subgroups, populate `StudyDesign.subgroup_variables`.
 
 #### GPT-5.4 tool definition
 
@@ -255,6 +325,8 @@ CAPTURE_TOOL = {
                 "is_randomized": {"type": "boolean"},
                 "relationship_form": {"type": "string", "enum": ["linear", "monotone", "nonlinear", "unknown"]},
                 "confounder_names": {"type": "array", "items": {"type": "string"}},
+                "subgroup_variables": {"type": "array", "items": {"type": "string"},
+                    "description": "Subgroups/subtypes that may drive a nonlinear/mixture pattern (Rule 8)."},
             },
             "required": ["design_type", "measurement_type", "is_randomized"],
         },
@@ -282,6 +354,7 @@ class CausalAnalyser:
 | `test_dry_run_returns_study_design` | Returns `StudyDesign` without API call |
 | `test_dry_run_nonlinear_note` | dry-run variant with nonlinear note in `notes` |
 | `test_rule7_note_populated` | `StudyDesign.notes` contains `"nonlinear"` when appropriate |
+| `test_rule8_subgroup_captured` | BET nonlinear/mixture finding → `subgroup_variables` populated from the dialogue |
 
 ### `tests/test_causal.py` — required cases
 
@@ -339,7 +412,8 @@ mixed/GEE model in v0.1.0 — they set a caveat (Step 7, H9).
 - `outcome_type` ∈ {CONTINUOUS, ORDINAL, BINARY, CATEGORICAL, COUNT, TIME_TO_EVENT}
 - `n_groups`; `measurement` ∈ {BETWEEN, WITHIN} (paired/repeated → WITHIN; MIXED treated as WITHIN here)
 - `n_min` — smallest per-group (or per-pair) sample size
-- `relationship` ∈ {LINEAR, MONOTONE, NONLINEAR} — correlation path only; from `StudyDesign.notes` (DesignDialogue rule 7), default LINEAR
+- `relationship` ∈ {LINEAR, MONOTONE, NONLINEAR} — correlation path only. **Primary source: the BET EDA** — `relationship_form(dominant DependenceForm)` for the outcome/predictor pair in `profile.nonlinear_dependencies`; falls back to `StudyDesign.notes` (rule 7) then default LINEAR
+- `subgroup_variables` (from `StudyDesign`) — when non-empty, run the chosen test **within each subgroup** (contextual analysis) and record it; full interaction model reserved for v0.2.0
 - `table_shape` ∈ {TWO_BY_TWO, RxC} and `min_expected` (smallest expected cell count) — categorical outcomes only
 - `nonnormality` ∈ {NONE, MILD, STRONG} — severity from the profiler (§6.1 / Step 3)
 - `force_student` — explicit user override (default `False`)
@@ -411,6 +485,8 @@ One test per test type + edge cases:
 | `test_select_spearman_monotone` | 1 group, 2 continuous, monotone note | `SPEARMAN_CORRELATION` |
 | `test_select_spearman_ordinal` | 1 group, ordinal outcome (no grouping) | `SPEARMAN_CORRELATION` |
 | `test_select_maxbet` | 1 group, 2 continuous, nonlinear note | `MAXBET` |
+| `test_relationship_from_bet_overrides_notes` | BET dominant form PARABOLIC for the pair, even if notes say "linear" → nonlinear path | `MAXBET` |
+| `test_stratified_when_subgroup` | `subgroup_variables` non-empty → per-stratum test selected + contextual-analysis rationale | per-stratum test |
 | `test_select_chi_squared_2x2` | 2 categorical, `min_expected ≥ 5` | `CHI_SQUARED` |
 | `test_select_fisher_exact` | 2×2 categorical, `min_expected < 5` | `FISHER_EXACT` |
 | `test_select_chi_squared_rxc` | 3×4 categorical table, `min_expected ≥ 5` | `CHI_SQUARED` |
@@ -427,7 +503,7 @@ One test per test type + edge cases:
 | `test_rationale_string` | Any test → `get_selection_rationale` returns non-empty string |
 | `test_publishes_event` | `EVENT_TEST_SELECTED` fired with correct payload |
 
-**Gate:** `pytest tests/test_selector.py` → 27 passing, 0 failing.  
+**Gate:** `pytest tests/test_selector.py` → 29 passing, 0 failing.  
 > **Statistician review checkpoint** — Statistician A signs off on the full decision tree before Step 6 begins.
 
 ---
