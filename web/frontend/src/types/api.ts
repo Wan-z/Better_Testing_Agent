@@ -1,6 +1,15 @@
 // TypeScript types mirroring the Pydantic models and API response schemas.
 
-export type VariableType = 'CONTINUOUS' | 'ORDINAL' | 'CATEGORICAL' | 'BINARY'
+export type VariableType =
+  | 'CONTINUOUS'
+  | 'ORDINAL'
+  | 'CATEGORICAL'
+  | 'BINARY'
+  | 'COUNT'
+  | 'TIME_TO_EVENT'
+  | 'DATETIME'
+  | 'GEOSPATIAL'
+  | 'IDENTIFIER'
 
 export type SessionStatus =
   | 'CREATED'

@@ -28,6 +28,8 @@
 
 The **Hypothesis Testing Agent (HTA)** is an AI-powered statistical reasoning system designed to act as a rigorous methodological collaborator for researchers. Its distinguishing characteristic is that it reasons about *study design and causal structure first*, before selecting or executing any statistical test.
 
+**General-purpose, healthcare-specialized.** HTA accepts any tabular dataset and the classical decision tree (§6.2) handles continuous, ordinal, and categorical outcomes in any domain. On top of that generality it is *specialized for healthcare and epidemiology*: the data forms that dominate clinical work — event **counts/rates**, **time-to-event** data with censoring, and **diagnostic-accuracy** evaluation — are first-class (§6.5), reported with the clinically meaningful effect measures a reviewer expects (incidence-rate ratios, hazard ratios, risk ratios, NNT, AUC — §6.6), tied to the relevant reporting guideline (CONSORT/STROBE/STARD/TRIPOD/PRISMA), and guarded by a healthcare caveat catalog (ecological fallacy, MAUP, spatial autocorrelation, non-proportional hazards, informative censoring, prevalence-dependence — §6.7). The NC county overdose / clinic-access example (`data/overdose_ed_visits.csv`) exercises this path end-to-end.
+
 ### Goals
 
 - Prevent common misuse of statistical tests (e.g., applying a t-test to non-normal data, ignoring confounders in observational studies).
@@ -158,7 +160,7 @@ All shared data structures are defined in `src/hta/models/` as **Pydantic v2** m
 
 | Model | Purpose | Key fields |
 |---|---|---|
-| `VariableType` | Enum: measurement level | `CONTINUOUS`, `ORDINAL`, `CATEGORICAL`, `BINARY` |
+| `VariableType` | Enum: measurement level / structural role | `CONTINUOUS`, `ORDINAL`, `CATEGORICAL`, `BINARY`, `COUNT`, `TIME_TO_EVENT`, `DATETIME`, `GEOSPATIAL`, `IDENTIFIER` (see §6.5) |
 | `DistributionStats` | Descriptive statistics | mean, std, median, IQR, skewness, kurtosis, min, max |
 | `NormalityTest` | Formal normality test result | name, statistic, p_value, `is_normal` (p > 0.05) |
 | `Variable` | Single variable profile | name, type, n, n_missing, distribution_stats, normality, unique_values |
@@ -172,14 +174,14 @@ All shared data structures are defined in `src/hta/models/` as **Pydantic v2** m
 | `MeasurementType` | Enum | `BETWEEN_SUBJECTS`, `WITHIN_SUBJECTS`, `MIXED` |
 | `VariableRole` | Enum: causal role | `CONFOUNDER`, `COLLIDER`, `MEDIATOR`, `EFFECT_MODIFIER`, `COVARIATE` |
 | `Confounder` | One causal variable | name, role, is_measured, adjustment_recommended, rationale |
-| `StudyDesign` | Captured study design | design_type, measurement_type, is_randomized, confounders, notes |
+| `StudyDesign` | Captured study design | design_type, measurement_type, is_randomized, confounders, notes, reporting_standard (CONSORT/STROBE/STARD/TRIPOD/PRISMA — §6.6) |
 | `CausalGraph` | DAG structure | nodes, edges (ordered pairs), adjustment_set, warnings |
 
 ### 4.3 Test models (`models/test.py`)
 
 | Model | Purpose | Key fields |
 |---|---|---|
-| `StatisticalTest` | Enum: 17 tests | see §6 |
+| `StatisticalTest` | Enum: 24 tests (4 reserved for v0.2.0) | classical (§6.2) + healthcare: `POISSON_REGRESSION`, `NEGATIVE_BINOMIAL_REGRESSION`, `LOG_RANK`, `COX_REGRESSION`, `ROC_AUC` (§6.5); reserved `LINEAR_REGRESSION`, `LOGISTIC_REGRESSION`, `LINEAR_MIXED_MODEL`, `GENERALIZED_ESTIMATING_EQUATIONS` |
 | `AssumptionStatus` | Enum | `MET`, `VIOLATED`, `UNTESTABLE`, `MARGINAL` |
 | `AssumptionCheck` | One assumption result | name, status, test_used, statistic, p_value, note |
 | `EffectSize` | Effect size with CI | measure_name, value, interpretation, ci_lower, ci_upper |
@@ -329,7 +331,19 @@ This replaces the fragile `is_normal = (p > 0.05)` switch: small samples no long
 
 ### 6.2 Decision tree
 
+The selector first **dispatches on the outcome's data form** so healthcare outcomes
+(counts/rates, time-to-event, diagnostic discrimination) are routed to the right family
+instead of being coerced into a mean comparison. The healthcare branches are specified in
+§6.5; the classical continuous/categorical tree below is the fall-through.
+
 ```
+# === Dispatch on outcome data form (healthcare-aware — see §6.5) ===
+if outcome_type == COUNT:             → count / rate model     (§6.5a — Poisson / NegBin, IRR)
+elif outcome_type == TIME_TO_EVENT:   → survival model         (§6.5b — log-rank / Cox, HR)
+elif diagnostic_evaluation:           → diagnostic accuracy    (§6.5c — ROC / AUC, DeLong)
+# GEOSPATIAL / DATETIME / IDENTIFIER are never outcomes (used for mapping, derivation, or
+# excluded). Otherwise fall through to the classical tree:
+
 # === CONTINUOUS or ORDINAL outcome ===
 if outcome_type in (CONTINUOUS, ORDINAL):
 
@@ -378,6 +392,147 @@ Fisher's odds ratio is defined only for 2×2 tables, but the tree reaches `CHI_S
 - **2×2** → odds ratio (plus φ). A 2×2 `CHI_SQUARED` also reports the odds ratio.
 - **R×C** → Cramér's V (the odds ratio is undefined; Fisher's exact uses the Fisher–Freeman–Halton generalisation).
 
+### 6.5 Healthcare specialization & data-form coverage
+
+HTA is **general** — it accepts any tabular dataset and the classical tree (§6.2) handles
+continuous, ordinal, and categorical outcomes regardless of domain. It is **specialized for
+healthcare**: the data forms that dominate clinical and epidemiological work — event
+counts/rates, time-to-event with censoring, and diagnostic discrimination — are recognised
+by the profiler and routed to the methods that those data actually require, with the
+clinically meaningful effect measures (§6.6) and the domain caveats (§6.7) attached.
+
+#### Data-form taxonomy (how each form is detected and routed)
+
+| `VariableType` | Detection signal | As outcome → | As exposure/covariate |
+|---|---|---|---|
+| `CONTINUOUS` | numeric, many distinct values | §6.2 mean/correlation tree | covariate |
+| `ORDINAL` | ordered categories / small integer scale | rank-based (§6.2) | ordinal predictor |
+| `CATEGORICAL` | unordered labels, >2 levels | χ²/Fisher (§6.2/§6.4) | grouping/strata |
+| `BINARY` | exactly 2 levels | χ²/Fisher; risk/odds (§6.6) | grouping |
+| `COUNT` | non-negative integers; often an exposure/offset column (`population`, `person_years`) | §6.5a Poisson/NegBin | predictor |
+| `TIME_TO_EVENT` | duration column **+** an event/censoring indicator | §6.5b log-rank/Cox | — |
+| `DATETIME` | parseable dates/timestamps | derive duration or time series; not tested directly | time index |
+| `GEOSPATIAL` | lat/long pair or areal id (FIPS/region) | never an outcome; drives maps + spatial caveats (§6.7) | strata |
+| `IDENTIFIER` | unique key per row / high-cardinality id | excluded from testing | excluded |
+
+#### 6.5a Count & rate outcomes (incidence)
+
+Counts (ED visits, hospitalisations, deaths), optionally per an exposure (person-time or
+population — supplied as a **rate offset** `log(exposure)`), are **not** means and must not be
+analysed with t-tests. The agent models them and reports an **incidence-rate ratio (IRR)**:
+
+```
+overdispersed = variance(count) > mean(count)        # check on the (conditional) counts
+if overdispersed:  → NEGATIVE_BINOMIAL_REGRESSION    # DEFAULT when overdispersed (the usual case)
+else:              → POISSON_REGRESSION              # only when variance ≈ mean
+```
+
+- Overdispersion (variance > mean) is the rule, not the exception, in real count data; an
+  unadjusted Poisson fit then gives anti-conservative standard errors, so negative binomial
+  is the safe default whenever overdispersion is detected.
+- A rate offset (`log(person_time)` / `log(population)`) converts counts to rates so the
+  coefficient is an IRR.
+- *County-level overdose ED counts with a `population` offset are the canonical example.*
+
+#### 6.5b Time-to-event (survival) outcomes
+
+A `TIME_TO_EVENT` column paired with an event indicator (1 = event, 0 = censored) triggers
+the survival family. Right-censoring is handled natively — it must not be dropped or treated
+as the event time.
+
+```
+if covariate_adjustment_needed or continuous_exposure:  → COX_REGRESSION   # hazard ratio
+else:                                                    → LOG_RANK         # group comparison
+# Kaplan–Meier curves + median survival are always reported descriptively alongside.
+```
+
+- Workflow: KM curves to visualise → log-rank for an unadjusted group comparison → Cox when
+  covariate adjustment / a continuous exposure / a hazard-ratio estimate is needed.
+- The **proportional-hazards (PH) assumption** is checked (scaled Schoenfeld residuals); a
+  violation is recorded as an `AssumptionCheck` and a §6.7 caveat.
+
+#### 6.5c Diagnostic-accuracy evaluation
+
+When the question is "how well does this marker/score discriminate disease?" (a continuous or
+ordinal `index` against a `BINARY` reference standard), the agent runs `ROC_AUC`:
+
+- Reports **AUC** with a DeLong 95% CI, plus the sensitivity/specificity/likelihood-ratio
+  pair at the chosen (or Youden-optimal) threshold.
+- Comparing two markers' AUCs uses the **DeLong test**.
+- Sens/spec are prevalence-independent; predictive values are not — PPV/NPV are reported only
+  with the operating prevalence stated (§6.7).
+
+#### Clustered / longitudinal data (reserved for v0.2.0)
+
+Patients nested in hospitals, or repeated measures over time, violate independence. The enum
+reserves `LINEAR_MIXED_MODEL` (subject-level random effects) and
+`GENERALIZED_ESTIMATING_EQUATIONS` (population-averaged, marginal) for this. In v0.1.0 the
+selector does **not** return them; instead, when a clustering/`IDENTIFIER` key or repeated
+`subject_id` is detected, it records a `WARNING` caveat that naive tests understate standard
+errors and a mixed/GEE model is indicated.
+
+### 6.6 Clinical effect measures, significance, and reporting standards
+
+**Effect measures are clinical, not just standardized.** Every result carries the measure a
+clinician expects, with a confidence interval (ratios on the ratio scale):
+
+| Outcome / test | Primary measure | Also reported |
+|---|---|---|
+| Binary (2 groups) | Risk ratio (RR) — cohort/RCT; Odds ratio (OR) — case-control | Absolute risk difference (ARD), **NNT/NNH = 1/ARD** |
+| Count / rate | Incidence-rate ratio (IRR) | rate difference |
+| Time-to-event | Hazard ratio (HR) | median-survival difference |
+| Diagnostic | AUC | sensitivity, specificity, LR+ / LR− |
+
+- **Report absolute alongside relative.** A large relative reduction can be clinically trivial
+  when the baseline risk is low (large NNT); RR/OR/HR/IRR are therefore always paired with an
+  absolute measure so the reader can judge magnitude.
+- **OR vs RR.** The odds ratio approximates the risk ratio only for rare outcomes; for common
+  outcomes the OR exaggerates the effect, so RR is preferred whenever the design supports it.
+
+**Statistical vs clinical significance.** A significant *p* answers "is there an effect?",
+not "does it matter?". The reporter compares the effect (and CI) against a **minimal clinically
+important difference (MCID)** when one is supplied, and otherwise emits an `INFO` caveat that
+statistical significance ≠ clinical importance (§6.7).
+
+**Reporting-standard mapping (EQUATOR).** The captured design selects the guideline whose
+checklist the methods text should follow; it is stored in `StudyDesign.reporting_standard`:
+
+| Design | Guideline |
+|---|---|
+| Randomised controlled trial | **CONSORT** |
+| Observational (cohort / case-control / cross-sectional, incl. ecological) | **STROBE** |
+| Diagnostic-accuracy study | **STARD** |
+| Prediction / prognostic model | **TRIPOD** |
+| Systematic review / meta-analysis | **PRISMA** |
+
+### 6.7 Healthcare caveat catalog (deterministic, appended by the reporter)
+
+These fire in addition to the general caveats (§5.6.1). Each is keyed off the data form,
+design, or an assumption result, so they are reproducible rather than LLM-invented.
+
+| # | Severity | Trigger | Caveat |
+|---|---|---|---|
+| H1 | WARNING | Outcome is an areal/county rate (`GEOSPATIAL` strata) | **Ecological fallacy** — a relationship between area averages need not hold for individuals. |
+| H2 | INFO | Aggregated areal units | **MAUP** — associations can change with the choice/scale of the areal units. |
+| H3 | WARNING | Areal data with neighbours | **Spatial autocorrelation** understates standard errors (Moran's I diagnostic); consider spatial/cluster-robust inference. |
+| H4 | INFO | `POISSON_REGRESSION` selected | Verify variance ≈ mean; if overdispersed, prefer negative binomial. |
+| H5 | WARNING | PH assumption check VIOLATED (Cox/log-rank) | **Non-proportional hazards** — a single HR is misleading; consider time-varying effects or RMST. |
+| H6 | INFO | Any survival analysis | Censoring assumed non-informative; verify dropout is unrelated to prognosis. |
+| H7 | WARNING | RR/OR/HR/IRR significant but absolute effect small / NNT large | Statistically significant but small absolute benefit — judge against the MCID. |
+| H8 | INFO | Diagnostic (PPV/NPV reported) | Predictive values depend on prevalence; state the operating prevalence. |
+| H9 | WARNING | Clustering / repeated-measures key detected | Observations are not independent — naive tests understate SEs; a mixed/GEE model is indicated (v0.2.0). |
+
+### Sources
+
+Count/rate & overdispersion: Regression analyses of counts and rates (Poisson / overdispersed
+Poisson / negative binomial); negative binomial for overdispersed count data. Survival:
+Kaplan–Meier, log-rank, and Cox PH basic concepts (PMC10357905). Diagnostic accuracy: ROC/AUC,
+sensitivity/specificity, likelihood ratios, DeLong comparison; STARD. Reporting guidelines:
+CONSORT / STROBE / STARD / TRIPOD / PRISMA (EQUATOR network). Clinical significance: RR / OR /
+HR / ARR / NNT and MCID. Spatial pitfalls: ecological fallacy, modifiable areal unit problem,
+spatial autocorrelation (Moran's I). Clustered/longitudinal: mixed-effects models vs GEE. URLs
+are listed in the implementation chat log and the README references.
+
 ### Effect size implementations
 
 | Test | Effect size | Method |
@@ -394,6 +549,11 @@ Fisher's odds ratio is defined only for 2×2 tables, but the tree reaches `CHI_S
 | FISHER_EXACT | Odds ratio if 2×2; Cramér's V if R×C | OR from the 2×2 table; V for the Fisher–Freeman–Halton case |
 | PEARSON_CORRELATION | r (is its own effect size) | Fisher's z CI |
 | SPEARMAN_CORRELATION | ρ (is its own effect size) | Bootstrap CI |
+| POISSON_REGRESSION | Incidence-rate ratio (IRR) | exp(β); Wald CI on the log scale, back-transformed |
+| NEGATIVE_BINOMIAL_REGRESSION | Incidence-rate ratio (IRR) | exp(β) with dispersion parameter; CI back-transformed from log scale |
+| LOG_RANK | Hazard ratio (from the test) + median-survival difference | HR via the Mantel–Haenszel estimate; KM medians per group |
+| COX_REGRESSION | Hazard ratio (HR) | exp(β); CI back-transformed from the log scale |
+| ROC_AUC | Area under the ROC curve (AUC) | DeLong CI; DeLong test to compare two AUCs |
 | BET / MAXBET / BEAST | BET symmetry statistic + depth | No standardised effect size; report maximum symmetry statistic, depth at which significance was found, and normalised mutual information as a supplementary measure |
 
 ### BET (Binary Expansion Testing) — methodology note

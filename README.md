@@ -42,6 +42,35 @@ All modules share Pydantic models (`src/hta/models/`) as a lingua franca.
 | Pearson correlation | Linear, bivariate continuous |
 | Spearman correlation | Monotone / ordinal |
 | MaxBET | Nonlinear independence (nonparametric) |
+| Poisson regression | Count / rate outcome (incidence-rate ratio) |
+| Negative binomial regression | Overdispersed count / rate outcome (IRR) |
+| Log-rank test | Time-to-event, group comparison |
+| Cox proportional hazards | Time-to-event, covariate-adjusted (hazard ratio) |
+| ROC / AUC | Diagnostic accuracy (DeLong CI; DeLong test to compare AUCs) |
+
+*Reserved for v0.2.0:* linear/logistic regression, linear mixed models and GEE
+(clustered / longitudinal data).
+
+## Data forms & healthcare specialization
+
+HTA is **general** — it profiles any tabular dataset and routes continuous, ordinal,
+and categorical outcomes through the classical decision tree regardless of domain. On
+top of that it is **specialized for healthcare and epidemiology**: the data forms that
+dominate clinical work are first-class, not coerced into mean comparisons.
+
+| Data form (`VariableType`) | How it's handled |
+|------|-----------|
+| Continuous / Ordinal / Categorical / Binary | Classical tree (t / ANOVA / correlation / χ² …) |
+| **Count / rate** (`COUNT`) | Poisson or negative-binomial regression with a rate offset → **incidence-rate ratio** |
+| **Time-to-event** (`TIME_TO_EVENT`) | Kaplan–Meier + log-rank / Cox, censoring-aware → **hazard ratio** |
+| **Geospatial** (`GEOSPATIAL`) | Drives maps/heatmaps; flags ecological fallacy, MAUP, spatial autocorrelation |
+| **Datetime / Identifier** | Used to derive durations / excluded from testing — never mis-analysed as numbers |
+
+Healthcare results carry the effect measures a reviewer expects (RR, OR, HR, IRR, NNT, AUC),
+note statistical-vs-clinical significance (MCID), map the design to a reporting guideline
+(CONSORT / STROBE / STARD / TRIPOD / PRISMA), and add domain caveats (ecological fallacy,
+non-proportional hazards, informative censoring, prevalence-dependence). See
+[`TECHNICAL_REPORT.md` §6.5–§6.7](TECHNICAL_REPORT.md).
 
 ## Requirements
 

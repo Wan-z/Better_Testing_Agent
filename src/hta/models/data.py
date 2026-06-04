@@ -9,12 +9,35 @@ from pydantic import BaseModel, Field
 
 
 class VariableType(str, Enum):
-    """Statistical measurement level of a variable."""
+    """Measurement level / structural role of a variable.
+
+    The first four are classical statistical measurement levels. The remainder let
+    the agent recognise and correctly route the data forms that dominate healthcare
+    and epidemiology rather than mis-analysing them as plain continuous numbers:
+
+    - ``COUNT`` — non-negative event counts (optionally per person-time / population),
+      e.g. ED visits, hospitalisations. Modelled with Poisson / negative-binomial
+      regression and reported as incidence-rate ratios, not means.
+    - ``TIME_TO_EVENT`` — survival / duration data, typically with right-censoring
+      (paired with an event indicator). Analysed with Kaplan–Meier, log-rank, and
+      Cox regression (hazard ratios).
+    - ``DATETIME`` — timestamps/dates; used to derive durations or time series, not
+      tested directly.
+    - ``GEOSPATIAL`` — coordinates or areal units (lat/long, FIPS, region); used for
+      mapping/heatmaps and to flag spatial pitfalls (ecological fallacy, MAUP,
+      spatial autocorrelation), not used as an analysis outcome.
+    - ``IDENTIFIER`` — keys/IDs (record id, MRN); excluded from statistical testing.
+    """
 
     CONTINUOUS = "CONTINUOUS"
     ORDINAL = "ORDINAL"
     CATEGORICAL = "CATEGORICAL"
     BINARY = "BINARY"
+    COUNT = "COUNT"
+    TIME_TO_EVENT = "TIME_TO_EVENT"
+    DATETIME = "DATETIME"
+    GEOSPATIAL = "GEOSPATIAL"
+    IDENTIFIER = "IDENTIFIER"
 
 
 class DistributionStats(BaseModel):

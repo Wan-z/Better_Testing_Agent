@@ -26,9 +26,19 @@ class StatisticalTest(str, Enum):
     SPEARMAN_CORRELATION = "SPEARMAN_CORRELATION"
     MAXBET = "MAXBET"  # nonlinear independence (BET); default BET-family choice
     BEAST = "BEAST"  # data-adaptive BET variant; reserved for explicit override
+    # Count / rate outcomes (healthcare incidence) — effect size is the incidence-rate ratio.
+    POISSON_REGRESSION = "POISSON_REGRESSION"  # default for counts/rates when not overdispersed
+    NEGATIVE_BINOMIAL_REGRESSION = "NEGATIVE_BINOMIAL_REGRESSION"  # default when overdispersed
+    # Time-to-event / survival outcomes — effect size is the hazard ratio.
+    LOG_RANK = "LOG_RANK"  # group comparison of survival curves (no covariates)
+    COX_REGRESSION = "COX_REGRESSION"  # survival with covariate adjustment (hazard ratio)
+    # Diagnostic-accuracy evaluation — discrimination via the ROC area under the curve.
+    ROC_AUC = "ROC_AUC"  # AUC with DeLong CI; DeLong test to compare two AUCs
     # Reserved — present in the enum but NOT reachable from the §6 decision tree in v0.1.0.
     LINEAR_REGRESSION = "LINEAR_REGRESSION"
     LOGISTIC_REGRESSION = "LOGISTIC_REGRESSION"
+    LINEAR_MIXED_MODEL = "LINEAR_MIXED_MODEL"  # clustered/longitudinal (subject-level); v0.2.0
+    GENERALIZED_ESTIMATING_EQUATIONS = "GENERALIZED_ESTIMATING_EQUATIONS"  # clustered marginal; v0.2.0
 
 
 class AssumptionStatus(str, Enum):
@@ -55,8 +65,12 @@ class EffectSize(BaseModel):
     """Standardised effect size estimate with confidence interval.
 
     measure_name examples: "Cohen's d", "Cramér's V", "rank-biserial r",
-    "eta-squared", "odds ratio".
-    interpretation follows Cohen (1988) conventions where applicable.
+    "eta-squared", "odds ratio". Healthcare effect measures use the same shape:
+    "incidence-rate ratio" (counts/rates), "hazard ratio" (survival), "risk ratio",
+    "AUC" (diagnostic discrimination). Ratio measures report the CI on the ratio
+    scale (back-transformed from the log scale).
+    interpretation follows Cohen (1988) conventions where applicable; for ratio
+    measures it describes direction/magnitude (e.g. "protective", "harmful").
     """
 
     measure_name: str

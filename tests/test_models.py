@@ -31,13 +31,18 @@ from hta.models.test import AssumptionCheck, AssumptionStatus, EffectSize, Stati
 
 class TestVariableTypeEnum:
     def test_all_values_exist(self) -> None:
-        assert VariableType.CONTINUOUS == "CONTINUOUS"
-        assert VariableType.ORDINAL == "ORDINAL"
-        assert VariableType.CATEGORICAL == "CATEGORICAL"
-        assert VariableType.BINARY == "BINARY"
+        assert {t.value for t in VariableType} == {
+            "CONTINUOUS", "ORDINAL", "CATEGORICAL", "BINARY",
+            "COUNT", "TIME_TO_EVENT", "DATETIME", "GEOSPATIAL", "IDENTIFIER",
+        }
 
     def test_count(self) -> None:
-        assert len(VariableType) == 4
+        assert len(VariableType) == 9
+
+    def test_healthcare_data_forms_present(self) -> None:
+        # Count/rate and survival outcomes are first-class, not coerced to CONTINUOUS.
+        assert VariableType.COUNT == "COUNT"
+        assert VariableType.TIME_TO_EVENT == "TIME_TO_EVENT"
 
 
 class TestStudyDesignTypeEnum:
@@ -66,14 +71,23 @@ class TestStatisticalTestEnum:
         "KRUSKAL_WALLIS", "MANN_WHITNEY_U", "WILCOXON_SIGNED_RANK", "CHI_SQUARED",
         "FISHER_EXACT", "MCNEMAR", "PEARSON_CORRELATION", "SPEARMAN_CORRELATION",
         "MAXBET", "BEAST",
+        "POISSON_REGRESSION", "NEGATIVE_BINOMIAL_REGRESSION",
+        "LOG_RANK", "COX_REGRESSION", "ROC_AUC",
         "LINEAR_REGRESSION", "LOGISTIC_REGRESSION",
+        "LINEAR_MIXED_MODEL", "GENERALIZED_ESTIMATING_EQUATIONS",
     }
 
     def test_all_values_exist(self) -> None:
         assert {t.value for t in StatisticalTest} == self.EXPECTED
 
     def test_count(self) -> None:
-        assert len(StatisticalTest) == 17
+        assert len(StatisticalTest) == 24
+
+    def test_healthcare_tests_present(self) -> None:
+        # Count/rate, survival, and diagnostic methods are selectable in v0.1.0.
+        for t in ("POISSON_REGRESSION", "NEGATIVE_BINOMIAL_REGRESSION",
+                  "LOG_RANK", "COX_REGRESSION", "ROC_AUC"):
+            assert t in {m.value for m in StatisticalTest}
 
 
 class TestAssumptionStatusEnum:
@@ -140,6 +154,20 @@ class TestVariable:
         )
         assert v.variable_type == VariableType.ORDINAL
 
+    def test_count_variable(self) -> None:
+        v = Variable(
+            name="ed_visits", variable_type=VariableType.COUNT,
+            n_observations=120, n_missing=0,
+        )
+        assert v.variable_type == VariableType.COUNT
+
+    def test_time_to_event_variable(self) -> None:
+        v = Variable(
+            name="time_to_relapse_days", variable_type=VariableType.TIME_TO_EVENT,
+            n_observations=200, n_missing=0,
+        )
+        assert v.variable_type == VariableType.TIME_TO_EVENT
+
     def test_optional_fields_default_none(self) -> None:
         v = Variable(
             name="x", variable_type=VariableType.CONTINUOUS, n_observations=10, n_missing=0
@@ -202,6 +230,17 @@ class TestStudyDesign:
         )
         assert sd.confounders == []
         assert sd.notes == []
+        assert sd.reporting_standard is None
+
+    def test_reporting_standard_round_trip(self) -> None:
+        sd = StudyDesign(
+            design_type=StudyDesignType.OBSERVATIONAL,
+            measurement_type=MeasurementType.BETWEEN_SUBJECTS,
+            is_randomized=False,
+            reporting_standard="STROBE",
+        )
+        restored = StudyDesign.model_validate_json(sd.model_dump_json())
+        assert restored.reporting_standard == "STROBE"
 
 
 class TestCausalGraph:
@@ -272,6 +311,33 @@ class TestTestResult:
         )
         assert tr.is_significant is False
         assert tr.power is None
+
+    def test_cox_hazard_ratio_result(self) -> None:
+        # Survival outcome: effect size is a hazard ratio with a ratio-scale CI.
+        es = EffectSize(measure_name="hazard ratio", value=0.62, interpretation="protective",
+                        ci_lower=0.45, ci_upper=0.85)
+        tr = TestResult(
+            test_used=StatisticalTest.COX_REGRESSION,
+            statistic=-0.478, p_value=0.003, effect_size=es,
+            confidence_interval=(0.45, 0.85), is_significant=True,
+            notes=["Proportional-hazards assumption checked via scaled Schoenfeld residuals."],
+        )
+        restored = TestResult.model_validate_json(tr.model_dump_json())
+        assert restored.test_used == StatisticalTest.COX_REGRESSION
+        assert restored.effect_size.measure_name == "hazard ratio"
+
+    def test_poisson_incidence_rate_ratio_result(self) -> None:
+        # Count/rate outcome: effect size is an incidence-rate ratio.
+        es = EffectSize(measure_name="incidence-rate ratio", value=1.34, interpretation="harmful",
+                        ci_lower=1.12, ci_upper=1.60)
+        tr = TestResult(
+            test_used=StatisticalTest.NEGATIVE_BINOMIAL_REGRESSION,
+            statistic=3.1, p_value=0.002, effect_size=es,
+            confidence_interval=(1.12, 1.60), is_significant=True,
+            notes=["Overdispersion detected (variance > mean) — negative binomial used over Poisson."],
+        )
+        assert tr.effect_size.value == 1.34
+        assert tr.test_used == StatisticalTest.NEGATIVE_BINOMIAL_REGRESSION
 
 
 class TestCaveat:
