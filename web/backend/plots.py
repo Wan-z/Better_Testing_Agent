@@ -203,8 +203,8 @@ def plotspec_to_plotly(spec: dict[str, Any]) -> dict[str, Any]:
                 ey += [a["y"], b["y"], None]
             traces.append({
                 "type": "scatter", "mode": "lines", "name": f.title(),
-                "x": ex, "y": ey, "opacity": 0.7, "hoverinfo": "skip",
-                "line": {"color": FORM_COLORS.get(f, "#64748b"), "width": 2},
+                "x": ex, "y": ey, "opacity": 0.9, "hoverinfo": "skip",
+                "line": {"color": FORM_COLORS.get(f, "#64748b"), "width": 3.5},
             })
         degs = [int(nd.get("degree", 1)) for nd in nodes]
         max_deg = max(degs) if degs else 1
@@ -216,12 +216,12 @@ def plotspec_to_plotly(spec: dict[str, Any]) -> dict[str, Any]:
             "text": [nd["name"] if (show_all or nd.get("degree", 1) >= thresh) else ""
                      for nd in nodes],
             "textposition": "top center",
-            "textfont": {"size": 10, "color": "#334155"},
+            "textfont": {"size": 11, "color": "#334155"},
             "hovertext": [f"{nd['name']} — {nd.get('degree', 1)} link(s)" for nd in nodes],
             "hoverinfo": "text", "showlegend": False,
             "marker": {
-                "size": [10 + 16 * (int(nd.get("degree", 1)) / max_deg) for nd in nodes],
-                "color": "#1e293b", "line": {"width": 1, "color": "#ffffff"},
+                "size": [9 + 11 * (int(nd.get("degree", 1)) / max_deg) for nd in nodes],
+                "color": "#1e293b", "line": {"width": 1.5, "color": "#ffffff"},
             },
         })
         net_layout = {

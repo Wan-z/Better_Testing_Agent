@@ -256,6 +256,30 @@ def test_dependence_network_from_screen() -> None:
     assert dependence_network(res.findings, seed=0).positions == net.positions
 
 
+def test_dependence_network_layout_separates_pairs() -> None:
+    # Three disconnected pairs must be laid out so each edge is visibly long (endpoints
+    # well separated) and the pairs are spread out rather than collapsed together.
+    rng = _rng(3)
+    n = 200
+    cols = {}
+    for p in range(3):
+        a = [rng.uniform(-1, 1) for _ in range(n)]
+        cols[f"a{p}"] = a
+        cols[f"b{p}"] = [ai * ai + rng.gauss(0, 0.02) for ai in a]   # parabolic partner
+    res = pairwise_screen(cols, seed=0)
+    net = dependence_network(res.findings, seed=0)
+    assert len(net.edges) >= 3
+    # every edge spans a clearly visible distance on the unit square
+    for x, y, _, _ in net.edges:
+        dx = net.positions[x][0] - net.positions[y][0]
+        dy = net.positions[x][1] - net.positions[y][1]
+        assert math.hypot(dx, dy) > 0.1
+    # distinct pairs occupy distinct regions (node positions are not all clustered)
+    xs = [p[0] for p in net.positions.values()]
+    ys = [p[1] for p in net.positions.values()]
+    assert (max(xs) - min(xs)) > 0.3 and (max(ys) - min(ys)) > 0.3
+
+
 def test_dependence_network_empty_when_independent() -> None:
     rng = _rng(5)
     cols = {f"v{i}": [rng.gauss(0, 1) for _ in range(200)] for i in range(4)}

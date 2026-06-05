@@ -763,6 +763,92 @@ def _spring_layout(
     return {nm: (_sc(pos[nm][0], xlo, xhi), _sc(pos[nm][1], ylo, yhi)) for nm in nodes}
 
 
+def _clip01(v: float) -> float:
+    return min(0.98, max(0.02, v))
+
+
+def _connected_components(
+    nodes: list[str], edges: list[tuple[str, str]],
+) -> list[list[str]]:
+    """Connected components of the graph, via union-find (deterministic order)."""
+    parent = {nm: nm for nm in nodes}
+
+    def find(x: str) -> str:
+        root = x
+        while parent[root] != root:
+            root = parent[root]
+        while parent[x] != root:
+            parent[x], x = root, parent[x]
+        return root
+
+    for a, b in edges:
+        if a in parent and b in parent:
+            parent[find(a)] = find(b)
+    groups: dict[str, list[str]] = {}
+    for nm in nodes:
+        groups.setdefault(find(nm), []).append(nm)
+    return list(groups.values())
+
+
+def _component_local_layout(
+    comp: list[str], comp_edges: list[tuple[str, str]], *, seed: int,
+) -> dict[str, tuple[float, float]]:
+    """Lay out one connected component in [-1, 1]^2.
+
+    A 2-node pair is placed at opposite ends so its edge is clearly visible; small
+    components use an even circle (edges become readable chords); larger ones use the
+    force-directed layout rescaled to fill the cell.
+    """
+    k = len(comp)
+    if k == 1:
+        return {comp[0]: (0.0, 0.0)}
+    if k == 2:
+        a, b = sorted(comp)
+        return {a: (-0.75, 0.0), b: (0.75, 0.0)}
+    if k <= 8:
+        order = sorted(comp)
+        return {
+            nm: (0.85 * math.cos(2 * math.pi * i / k), 0.85 * math.sin(2 * math.pi * i / k))
+            for i, nm in enumerate(order)
+        }
+    raw = _spring_layout(comp, comp_edges, seed=seed)
+    return {nm: (2 * (raw[nm][0] - 0.5) / 0.9, 2 * (raw[nm][1] - 0.5) / 0.9) for nm in comp}
+
+
+def _network_layout(
+    nodes: list[str], edges: list[tuple[str, str]], *, seed: int = 0,
+) -> dict[str, tuple[float, float]]:
+    """Component-aware layout: place each connected component in its own near-square grid
+    cell (partial last row centred) and lay the component out within that cell. Keeps
+    edges visibly long and spreads disconnected pairs evenly across the canvas."""
+    n = len(nodes)
+    if n == 0:
+        return {}
+    if n == 1:
+        return {nodes[0]: (0.5, 0.5)}
+    comps = _connected_components(nodes, edges)
+    comps.sort(key=lambda c: (-len(c), sorted(c)[0]))
+    m = len(comps)
+    cols = math.ceil(math.sqrt(m))
+    rows = math.ceil(m / cols)
+    cw, ch = 1.0 / cols, 1.0 / rows
+    cell = min(cw, ch) * 0.5 * 0.82          # square half-extent inside each grid cell
+    pos: dict[str, tuple[float, float]] = {}
+    for idx, comp in enumerate(comps):
+        r = idx // cols
+        col_in_row = idx - r * cols
+        row_count = cols if r < rows - 1 else (m - cols * (rows - 1))
+        x_off = (cols - row_count) * cw / 2.0     # centre a partial last row
+        cx = x_off + (col_in_row + 0.5) * cw
+        cy = 1.0 - (r + 0.5) * ch                 # lay rows top-to-bottom
+        compset = set(comp)
+        comp_edges = [(a, b) for a, b in edges if a in compset and b in compset]
+        local = _component_local_layout(comp, comp_edges, seed=seed + idx)
+        for nm, (lx, ly) in local.items():
+            pos[nm] = (_clip01(cx + lx * cell), _clip01(cy + ly * cell))
+    return pos
+
+
 def dependence_network(
     findings: list[PairDependence], *,
     max_nodes: int = 60, max_edges: int = 150, seed: int = 0,
@@ -786,7 +872,7 @@ def dependence_network(
     for x, y, _, _ in edges:
         degrees[x] += 1
         degrees[y] += 1
-    positions = _spring_layout(nodes, [(x, y) for x, y, _, _ in edges], seed=seed)
+    positions = _network_layout(nodes, [(x, y) for x, y, _, _ in edges], seed=seed)
     capped = n_sig > len(kept) or len(deg_all) > len(nodes)
     return DependenceNetwork(
         nodes=nodes, positions=positions, degrees=degrees, edges=edges,
