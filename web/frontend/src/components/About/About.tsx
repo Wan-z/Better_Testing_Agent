@@ -89,6 +89,7 @@ export default function About() {
           <h2 className="text-2xl font-bold text-slate-900 mb-4">References</h2>
           <ul className="space-y-2 text-slate-600 text-sm">
             <li>Zhang, K. (2019). BET on Independence. <em>Journal of the American Statistical Association</em>, 114(528), 1620–1637.</li>
+            <li>Xiang, S., Zhang, W., Liu, S., Hoadley, K. A., Perou, C. M., Zhang, K., &amp; Marron, J. S. (2023). Pairwise Nonlinear Dependence Analysis of Genomic Data. <em>The Annals of Applied Statistics</em>, 17(4). DOI: 10.1214/23-AOAS1745.</li>
             <li>Vallat, R. (2018). Pingouin: statistics in Python. <em>Journal of Open Source Software</em>, 3(31), 1026.</li>
             <li>Virtanen, P. et al. (2020). SciPy 1.0: Fundamental Algorithms for Scientific Computing in Python. <em>Nature Methods</em>, 17, 261–272.</li>
           </ul>

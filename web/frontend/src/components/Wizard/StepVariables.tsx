@@ -10,16 +10,21 @@ interface Props {
 }
 
 const EXAMPLES = [
+  'Counties with more OUD treatment clinics have lower nonfatal overdose ED visit rates',
   'Treatment group has lower blood pressure than control',
-  'Before-and-after scores differ significantly',
-  'Association between age and recovery time',
+  'Association between clinic density and overdose ED rate',
 ]
 
 const TYPE_COLOURS: Record<VariableType, string> = {
-  CONTINUOUS:  'bg-blue-100 text-blue-700',
-  CATEGORICAL: 'bg-purple-100 text-purple-700',
-  BINARY:      'bg-orange-100 text-orange-700',
-  ORDINAL:     'bg-teal-100 text-teal-700',
+  CONTINUOUS:    'bg-blue-100 text-blue-700',
+  CATEGORICAL:   'bg-purple-100 text-purple-700',
+  BINARY:        'bg-orange-100 text-orange-700',
+  ORDINAL:       'bg-teal-100 text-teal-700',
+  COUNT:         'bg-amber-100 text-amber-700',
+  TIME_TO_EVENT: 'bg-rose-100 text-rose-700',
+  DATETIME:      'bg-sky-100 text-sky-700',
+  GEOSPATIAL:    'bg-emerald-100 text-emerald-700',
+  IDENTIFIER:    'bg-slate-100 text-slate-600',
 }
 
 export default function StepVariables({ columns, inferredTypes, preview, onNext }: Props) {

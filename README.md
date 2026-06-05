@@ -33,7 +33,8 @@ All modules share Pydantic models (`src/hta/models/`) as a lingua franca.
 | Mann–Whitney U | Non-normal / ordinal, 2 groups |
 | Paired t-test | Within-subjects, continuous |
 | Wilcoxon signed-rank | Within-subjects, non-normal |
-| One-way ANOVA | Continuous, ≥ 3 groups |
+| Welch's ANOVA | Continuous, ≥ 3 groups (default; no equal-variance assumption) |
+| One-way ANOVA | Continuous, ≥ 3 groups (equal-variance, explicit override) |
 | Kruskal–Wallis | Non-parametric, ≥ 3 groups |
 | Chi-squared | Categorical × categorical (expected ≥ 5) |
 | Fisher's exact | 2×2 contingency (expected < 5) |
@@ -41,6 +42,56 @@ All modules share Pydantic models (`src/hta/models/`) as a lingua franca.
 | Pearson correlation | Linear, bivariate continuous |
 | Spearman correlation | Monotone / ordinal |
 | MaxBET | Nonlinear independence (nonparametric) |
+| Poisson regression | Count / rate outcome (incidence-rate ratio) |
+| Negative binomial regression | Overdispersed count / rate outcome (IRR) |
+| Log-rank test | Time-to-event, group comparison |
+| Cox proportional hazards | Time-to-event, covariate-adjusted (hazard ratio) |
+| ROC / AUC | Diagnostic accuracy (DeLong CI; DeLong test to compare AUCs) |
+
+*Reserved for v0.2.0:* linear/logistic regression, linear mixed models and GEE
+(clustered / longitudinal data).
+
+## Data forms & healthcare specialization
+
+HTA is **general** — it profiles any tabular dataset and routes continuous, ordinal,
+and categorical outcomes through the classical decision tree regardless of domain. On
+top of that it is **specialized for healthcare and epidemiology**: the data forms that
+dominate clinical work are first-class, not coerced into mean comparisons.
+
+| Data form (`VariableType`) | How it's handled |
+|------|-----------|
+| Continuous / Ordinal / Categorical / Binary | Classical tree (t / ANOVA / correlation / χ² …) |
+| **Count / rate** (`COUNT`) | Poisson or negative-binomial regression with a rate offset → **incidence-rate ratio** |
+| **Time-to-event** (`TIME_TO_EVENT`) | Kaplan–Meier + log-rank / Cox, censoring-aware → **hazard ratio** |
+| **Geospatial** (`GEOSPATIAL`) | Drives maps/heatmaps; flags ecological fallacy, MAUP, spatial autocorrelation |
+| **Datetime / Identifier** | Used to derive durations / excluded from testing — never mis-analysed as numbers |
+
+Healthcare results carry the effect measures a reviewer expects (RR, OR, HR, IRR, NNT, AUC),
+note statistical-vs-clinical significance (MCID), map the design to a reporting guideline
+(CONSORT / STROBE / STARD / TRIPOD / PRISMA), and add domain caveats (ecological fallacy,
+non-proportional hazards, informative censoring, prevalence-dependence). See
+[`TECHNICAL_REPORT.md` §6.5–§6.7](TECHNICAL_REPORT.md).
+
+### Exploratory dependence analysis (BET)
+
+Before any test is chosen, the profiler runs a **Binary Expansion Testing** screen
+(`src/hta/bet_screen.py`) over the numeric columns. BET is the framework of
+[Zhang, K. (2019), *"BET on Independence,"* JASA 114(528), 1620–1637, DOI 10.1080/01621459.2018.1537921](https://doi.org/10.1080/01621459.2018.1537921);
+the pairwise-EDA framing and tie-jittering follow its genomic application
+[Xiang, Zhang, Liu, Hoadley, Perou, Zhang & Marron (2023), *Ann. Appl. Stat.* 17(4), DOI 10.1214/23-AOAS1745](https://projecteuclid.org/journals/annals-of-applied-statistics/volume-17/issue-4/Pairwise-nonlinear-dependence-analysis-of-genomic-data/10.1214/23-AOAS1745.full) (preprint [arXiv:2202.09880](https://arxiv.org/abs/2202.09880)). For
+every pair it copula-transforms the data (jittering ties / zero-inflation), runs depth-2
+MaxBET, and reports the **form** of dependence (monotone, parabolic, "W"-bimodal,
+checkerboard, linear) with its direction — flagging **nonlinear-only** pairs that Pearson and
+Spearman miss. Mixture-type forms prompt the dialogue to ask which **subgroups/subtypes** drive
+the pattern (captured for stratified analysis), and the dominant form becomes the selector's
+relationship prior. This is the agent's effect-modification / heterogeneity step.
+
+The engine also provides a **two-stage Max BET** over depths (`maxbet_twostage`, the §7
+independence test) and a **dependency-region** read-out (`cross_region`) that shows *where* the
+dependence lives. Two runnable examples reproduce the paper's analyses (synthetic, deterministic):
+[`examples/stars_independence.py`](examples/stars_independence.py) (the "are stars uniformly
+scattered?" test) and [`examples/gene_pair_subtype.py`](examples/gene_pair_subtype.py) (a
+nonlinear gene pair created by a cancer-subtype mixture, with the joint-classification payoff).
 
 ## Requirements
 
@@ -84,7 +135,23 @@ HTA_LOG_LEVEL=INFO
 
 `HTA_DEFAULT_DRY_RUN=true` runs the full pipeline with realistic stub data — no API key needed.
 
-## Running the web app
+## Try it now — the playground (zero install)
+
+The quickest way to throw your own data and a question at the agent's logic — no
+dependencies, no build step, no API key:
+
+```bash
+PYTHONPATH=src python playground/app.py        # then open http://localhost:8000
+```
+
+Paste a CSV, type a hypothesis, name the outcome column (plus an optional group or
+predictor), and it profiles the variables, runs the **real BET dependence engine** over
+every numeric pair, and recommends a test via the §6.2 decision tree — with the
+dependence region drawn out. Click a sample link (stars / gene / overdose) to start.
+See [`playground/README.md`](playground/README.md). *(Group comparisons are recommended,
+not executed — that's the not-yet-built Step-6 executor.)*
+
+## Running the full web app (FastAPI + React, stubbed pipeline)
 
 ```bash
 # Terminal 1 — FastAPI backend (port 8000)
@@ -127,6 +194,7 @@ mypy src/hta           # type checking
 src/hta/
   models/           Shared Pydantic data models
   bus.py            Pub/sub event bus
+  bet_screen.py     BET pairwise nonlinear-dependence EDA engine (pure stdlib)
   modules/          DataProfiler, DesignDialogue, TestSelector, TestExecutor, Reporter
   agent.py          Top-level orchestrator
   cli.py            Typer CLI
@@ -144,20 +212,31 @@ web/
       types/        TypeScript types mirroring Pydantic models
   docker-compose.yml
   Dockerfile.backend / Dockerfile.frontend
+data/               Example dataset + generator (see data/README.md)
 tests/              pytest test suite
 TECHNICAL_REPORT.md Statistical methodology and design decisions
 IMPLEMENTATION_PLAN.md Step-by-step build guide
 ```
 
+## Example dataset
+
+[`data/overdose_ed_visits.csv`](data/README.md) is a **synthetic** NC county dataset
+(100 counties) for demonstrating the agent on a public-health question: *is OUD treatment
+clinic density associated with the nonfatal overdose ED visit rate?* It drives the dry-run
+web demo, which selects **Spearman's correlation** (ρ ≈ −0.67) and renders a
+**clinic-density heatmap** alongside the scatter plot. Values are simulated for
+demonstration only — not real surveillance data. Regenerate with
+`python data/generate_dataset.py`.
+
 ## Design decisions
 
 Key choices are documented in [`TECHNICAL_REPORT.md`](TECHNICAL_REPORT.md):
 
-- **Welch's t-test as unconditional default** — no equal-variance pre-test
-- **Anderson-Darling at N > 2 000** (Shapiro-Wilk below that threshold)
-- **Normality as soft signal** — informs but does not gate test selection
-- **MaxBET** for nonlinear independence testing (BEAST deferred to v0.2)
-- **Always-on post-hoc** — Tukey HSD / Dunn with Holm correction
+- **Welch's t-test / Welch's ANOVA as unconditional defaults** — no equal-variance pre-test
+- **No formal normality test above N = 2 000** — Shapiro-Wilk corroborates below that; above it, severity comes from skew/kurtosis magnitude (a one-sample KS/Shapiro vs estimated parameters is invalid there)
+- **Normality as a graded signal** (`NONE`/`MILD`/`STRONG`) — informs but does not gate test selection
+- **MaxBET** for nonlinear independence testing (BEAST reachable via explicit override)
+- **Always-on post-hoc, Holm-adjusted** — Games–Howell (Welch ANOVA) / Tukey HSD (pooled ANOVA) / Dunn (Kruskal–Wallis)
 - **Effect sizes with bootstrap CIs** on every result
 
 ## Contributing
