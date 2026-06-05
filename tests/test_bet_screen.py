@@ -14,6 +14,7 @@ from hta.bet_screen import (
     DEFAULT_ALPHA,
     LINEAR_NULL_THRESHOLD,
     cross_region,
+    dependence_network,
     empirical_copula,
     interaction_plot,
     maxbet,
@@ -224,6 +225,42 @@ def test_interaction_plot_region_grid_is_balanced() -> None:
     assert all(c in (-1, 1) for c in flat)
     # A cross interaction splits the 4×4 grid into two equal halves (Zhang 2019 §3.3).
     assert flat.count(1) == flat.count(-1) == 8
+
+
+def test_dependence_network_from_screen() -> None:
+    # The network is built from the screen's significant edges: nodes are the variables
+    # involved, edges carry the dependence form, and the layout is deterministic.
+    rng = _rng(2)
+    n = 220
+    t = [rng.uniform(-1, 1) for _ in range(n)]
+    cols = {
+        "lin": [2 * ti + rng.gauss(0, 0.2) for ti in t],       # monotone with t
+        "para": [ti * ti + rng.gauss(0, 0.02) for ti in t],     # parabolic with t
+        "noise": [rng.gauss(0, 1) for _ in range(n)],            # independent
+        "t": t,
+    }
+    res = pairwise_screen(cols, seed=0)
+    net = dependence_network(res.findings, seed=0)
+    assert net.nodes                                            # some significant edges
+    assert net.edges
+    assert net.n_significant_edges == sum(1 for f in res.findings if f.significant)
+    for x, y, form, z in net.edges:
+        assert x in net.positions and y in net.positions
+        assert form in ("MONOTONE", "LINEAR", "PARABOLIC", "SINUSOIDAL",
+                        "CHECKERBOARD", "COMPLEX")
+        assert z > 0
+    # positions are inside the unit square, degrees match the kept edges
+    assert all(0.0 <= px <= 1.0 and 0.0 <= py <= 1.0 for px, py in net.positions.values())
+    assert sum(net.degrees.values()) == 2 * len(net.edges)
+    # deterministic given the seed
+    assert dependence_network(res.findings, seed=0).positions == net.positions
+
+
+def test_dependence_network_empty_when_independent() -> None:
+    rng = _rng(5)
+    cols = {f"v{i}": [rng.gauss(0, 1) for _ in range(200)] for i in range(4)}
+    net = dependence_network(pairwise_screen(cols, seed=0).findings, seed=0)
+    assert net.nodes == [] and net.edges == []
 
 
 def test_interaction_plot_independent_quiet() -> None:

@@ -76,10 +76,17 @@ export default function StepReview({ profile, variables, studyDesign, onRun, onB
             <PlotViewer plots={edaPlots} />
 
             <p className="text-xs text-slate-400 mt-3 leading-relaxed">
-              Each pair is shown on the empirical-copula (rank) unit square. Points are coloured by the
-              dominant <strong>binary interaction</strong> — the shaded checkerboard is that interaction's
-              ± region on the BET grid — so a cluster of one colour in particular cells is the signature of
-              a latent subgroup (heterogeneity).
+              {(eda!.n_network_edges ?? 0) > 0 && (
+                <>
+                  The first tab is a <strong>dependence network</strong> (as in Xiang et al.): each
+                  variable is a node and every edge is a significant nonlinear relationship, coloured by
+                  its binary-interaction type.{' '}
+                </>
+              )}
+              The pair tabs show each top pair on the empirical-copula (rank) unit square, with points
+              coloured by the dominant <strong>binary interaction</strong> — the shaded checkerboard is
+              that interaction's ± region on the BET grid — so a cluster of one colour reveals a latent
+              subgroup (heterogeneity).
               {eda!.label_colored_by
                 ? ` The last tab instead colours the top pair by the known label "${eda!.label_colored_by}".`
                 : ''}

@@ -89,6 +89,30 @@ def _interaction_plotspec(
     }
 
 
+def _network_plotspec(net: Any) -> dict[str, Any]:
+    """A 'bet_network' PlotSpec dict (data half) for the dependence-network graph."""
+    cap = " (top edges shown)" if net.capped else ""
+    title = (f"Nonlinear dependence network — {len(net.edges)} link(s), "
+             f"{len(net.nodes)} variable(s){cap}")
+    return {
+        "plot_type": "bet_network",
+        "title": title,
+        "x_label": "", "y_label": "",
+        "data": {
+            "nodes": [
+                {"name": nm, "x": round(net.positions[nm][0], 4),
+                 "y": round(net.positions[nm][1], 4), "degree": net.degrees[nm]}
+                for nm in net.nodes
+            ],
+            "edges": [
+                {"x": x, "y": y, "form": form, "bet_z": round(z, 3)}
+                for x, y, form, z in net.edges
+            ],
+            "capped": net.capped,
+        },
+    }
+
+
 def _eda_text(n_screened: int, n_sig: int, n_nl: int, chosen: list[Any],
               subtype_suggestive: bool) -> str:
     """Plain-language EDA summary shown to the user at the Review step."""
@@ -123,7 +147,11 @@ def _eda_plots_and_summary(
     usable categorical column it also emits a label-coloured version of the top pair so
     the user can compare the latent interaction structure against known subgroups.
     """
-    from hta.bet_screen import SUBTYPE_SUGGESTIVE_FORMS, interaction_plot
+    from hta.bet_screen import (
+        SUBTYPE_SUGGESTIVE_FORMS,
+        dependence_network,
+        interaction_plot,
+    )
     from web.backend.plots import plotspec_to_plotly
 
     if not screen.findings:
@@ -169,6 +197,15 @@ def _eda_plots_and_summary(
         spec["plotly_json"] = plotspec_to_plotly(spec)
         eda_plots.append(spec)
 
+    # Headline overview: the Xiang-style dependence network (variables = nodes,
+    # significant nonlinear pairs = edges coloured by binary interaction). Prepended so it
+    # is the first tab in the EDA viewer.
+    net = dependence_network(screen.findings, seed=0)
+    if net.edges:
+        net_spec = _network_plotspec(net)
+        net_spec["plotly_json"] = plotspec_to_plotly(net_spec)
+        eda_plots.insert(0, net_spec)
+
     subtype = any(f.form in SUBTYPE_SUGGESTIVE_FORMS for f in chosen)
     summary: dict[str, Any] = {
         "n_pairs_screened": len(screen.findings),
@@ -176,6 +213,7 @@ def _eda_plots_and_summary(
         "n_significant": screen.n_significant,
         "n_nonlinear_only": screen.n_nonlinear_only,
         "subtype_suggestive": subtype,
+        "n_network_edges": net.n_significant_edges,
         "label_colored_by": label_col,
         "top_pairs": [
             {"x": f.x, "y": f.y, "form": f.form, "bet_z": round(f.bet_z, 4),

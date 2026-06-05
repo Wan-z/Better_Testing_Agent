@@ -684,3 +684,111 @@ def interaction_plot(
         pearson_r=pearson, spearman_rho=spearman,
         significant=significant, nonlinear_only=nonlinear_only,
     )
+
+
+# ── dependence network (Xiang et al. 2023, Fig. 6 / 8 connection plots) ────────
+
+@dataclass
+class DependenceNetwork:
+    """A graph of nonlinear relationships across variables (Xiang et al. 2023 §6).
+
+    Nodes are variables; an edge joins each pair with *significant* BET dependence, and
+    carries the dependence ``form`` so the renderer can colour edges by binary interaction
+    (the paper draws one connection plot per BID; we colour edges by BID/form instead).
+    ``positions`` is a deterministic force-directed layout on the unit square so hubs and
+    communities of co-dependent variables are visible.
+    """
+
+    nodes: list[str]
+    positions: dict[str, tuple[float, float]]
+    degrees: dict[str, int]
+    edges: list[tuple[str, str, str, float]]   # (x, y, form, bet_z) per significant pair
+    n_significant_edges: int                   # total significant edges before capping
+    capped: bool                               # True if nodes/edges were truncated
+
+
+def _spring_layout(
+    nodes: list[str], edges: list[tuple[str, str]], *, seed: int = 0, iterations: int = 150,
+) -> dict[str, tuple[float, float]]:
+    """Deterministic Fruchterman-Reingold layout, rescaled into [0.05, 0.95]^2."""
+    n = len(nodes)
+    if n == 0:
+        return {}
+    if n == 1:
+        return {nodes[0]: (0.5, 0.5)}
+    rng = random.Random(seed)
+    pos = {
+        nm: [0.5 + 0.35 * math.cos(2 * math.pi * i / n) + rng.uniform(-0.02, 0.02),
+             0.5 + 0.35 * math.sin(2 * math.pi * i / n) + rng.uniform(-0.02, 0.02)]
+        for i, nm in enumerate(nodes)
+    }
+    k = math.sqrt(1.0 / n)
+    temp = 0.15
+    for _ in range(iterations):
+        disp = {nm: [0.0, 0.0] for nm in nodes}
+        for i in range(n):                          # repulsion between every node pair
+            ni = nodes[i]
+            for j in range(i + 1, n):
+                nj = nodes[j]
+                dx, dy = pos[ni][0] - pos[nj][0], pos[ni][1] - pos[nj][1]
+                dist = math.hypot(dx, dy) or 1e-4
+                rep = (k * k) / dist
+                ux, uy = dx / dist, dy / dist
+                disp[ni][0] += ux * rep
+                disp[ni][1] += uy * rep
+                disp[nj][0] -= ux * rep
+                disp[nj][1] -= uy * rep
+        for a, b in edges:                          # attraction along edges
+            dx, dy = pos[a][0] - pos[b][0], pos[a][1] - pos[b][1]
+            dist = math.hypot(dx, dy) or 1e-4
+            att = (dist * dist) / k
+            ux, uy = dx / dist, dy / dist
+            disp[a][0] -= ux * att
+            disp[a][1] -= uy * att
+            disp[b][0] += ux * att
+            disp[b][1] += uy * att
+        for nm in nodes:
+            dx, dy = disp[nm]
+            dist = math.hypot(dx, dy) or 1e-4
+            pos[nm][0] += (dx / dist) * min(dist, temp)
+            pos[nm][1] += (dy / dist) * min(dist, temp)
+        temp = max(0.01, temp * 0.96)
+    xs = [pos[nm][0] for nm in nodes]
+    ys = [pos[nm][1] for nm in nodes]
+    xlo, xhi, ylo, yhi = min(xs), max(xs), min(ys), max(ys)
+
+    def _sc(v: float, lo: float, hi: float) -> float:
+        return 0.5 if hi - lo < 1e-9 else 0.05 + 0.9 * (v - lo) / (hi - lo)
+
+    return {nm: (_sc(pos[nm][0], xlo, xhi), _sc(pos[nm][1], ylo, yhi)) for nm in nodes}
+
+
+def dependence_network(
+    findings: list[PairDependence], *,
+    max_nodes: int = 60, max_edges: int = 150, seed: int = 0,
+) -> DependenceNetwork:
+    """Build the nonlinear-dependence graph from a screen's significant findings.
+
+    Keeps the strongest edges (by BET z) and the highest-degree nodes if the graph would
+    be too dense to read, mirroring the paper's "top genes" connection plots.
+    """
+    sig = sorted((f for f in findings if f.significant), key=lambda f: f.bet_z, reverse=True)
+    n_sig = len(sig)
+    kept = sig[:max_edges]
+    deg_all: dict[str, int] = {}
+    for f in kept:
+        deg_all[f.x] = deg_all.get(f.x, 0) + 1
+        deg_all[f.y] = deg_all.get(f.y, 0) + 1
+    nodes = sorted(deg_all, key=lambda nm: (deg_all[nm], nm), reverse=True)[:max_nodes]
+    nodeset = set(nodes)
+    edges = [(f.x, f.y, f.form, f.bet_z) for f in kept if f.x in nodeset and f.y in nodeset]
+    degrees = {nm: 0 for nm in nodes}
+    for x, y, _, _ in edges:
+        degrees[x] += 1
+        degrees[y] += 1
+    positions = _spring_layout(nodes, [(x, y) for x, y, _, _ in edges], seed=seed)
+    capped = n_sig > len(kept) or len(deg_all) > len(nodes)
+    return DependenceNetwork(
+        nodes=nodes, positions=positions, degrees=degrees, edges=edges,
+        n_significant_edges=n_sig, capped=capped,
+    )

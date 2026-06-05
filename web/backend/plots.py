@@ -6,6 +6,12 @@ from typing import Any
 
 
 PLOTLY_PALETTE = ["#4f46e5", "#94a3b8", "#10b981", "#f59e0b", "#ef4444"]
+# Edge colour per dependence form for the dependence-network graph (Xiang et al. Fig 6/8):
+# "different colours for different binary interactions".
+FORM_COLORS = {
+    "MONOTONE": "#6366f1", "LINEAR": "#0ea5e9", "PARABOLIC": "#f59e0b",
+    "SINUSOIDAL": "#ec4899", "CHECKERBOARD": "#10b981", "COMPLEX": "#ef4444",
+}
 BASE_LAYOUT: dict[str, Any] = {
     "plot_bgcolor": "#f8fafc",
     "paper_bgcolor": "#ffffff",
@@ -170,6 +176,63 @@ def plotspec_to_plotly(spec: dict[str, Any]) -> dict[str, Any]:
             "legend": {"orientation": "h", "y": -0.2, "x": 0},
         }
         return {"data": traces, "layout": bet_layout}
+
+    if plot_type == "bet_network":
+        # Network of nonlinear relationships (Xiang et al. 2023, Fig. 6/8): variables are
+        # nodes, each edge is a significant BET dependence, edges coloured by binary
+        # interaction (form). One line trace per form gives the coloured legend.
+        nodes = data_raw.get("nodes", [])
+        edges = data_raw.get("edges", [])
+        by_name = {nd["name"]: nd for nd in nodes}
+        forms_order: list[str] = []
+        for e in edges:
+            f = e.get("form", "COMPLEX")
+            if f not in forms_order:
+                forms_order.append(f)
+        traces = []
+        for f in forms_order:
+            ex: list[Any] = []
+            ey: list[Any] = []
+            for e in edges:
+                if e.get("form") != f:
+                    continue
+                a, b = by_name.get(e["x"]), by_name.get(e["y"])
+                if not a or not b:
+                    continue
+                ex += [a["x"], b["x"], None]
+                ey += [a["y"], b["y"], None]
+            traces.append({
+                "type": "scatter", "mode": "lines", "name": f.title(),
+                "x": ex, "y": ey, "opacity": 0.7, "hoverinfo": "skip",
+                "line": {"color": FORM_COLORS.get(f, "#64748b"), "width": 2},
+            })
+        degs = [int(nd.get("degree", 1)) for nd in nodes]
+        max_deg = max(degs) if degs else 1
+        show_all = len(nodes) <= 25
+        thresh = max(2, max_deg * 0.5)
+        traces.append({
+            "type": "scatter", "mode": "markers+text", "name": "variables",
+            "x": [nd["x"] for nd in nodes], "y": [nd["y"] for nd in nodes],
+            "text": [nd["name"] if (show_all or nd.get("degree", 1) >= thresh) else ""
+                     for nd in nodes],
+            "textposition": "top center",
+            "textfont": {"size": 10, "color": "#334155"},
+            "hovertext": [f"{nd['name']} — {nd.get('degree', 1)} link(s)" for nd in nodes],
+            "hoverinfo": "text", "showlegend": False,
+            "marker": {
+                "size": [10 + 16 * (int(nd.get("degree", 1)) / max_deg) for nd in nodes],
+                "color": "#1e293b", "line": {"width": 1, "color": "#ffffff"},
+            },
+        })
+        net_layout = {
+            **layout,
+            "xaxis": {"visible": False, "range": [0, 1]},
+            "yaxis": {"visible": False, "range": [0, 1], "scaleanchor": "x"},
+            "showlegend": True,
+            "legend": {"orientation": "h", "y": -0.04, "x": 0},
+            "margin": {"t": 30, "r": 10, "b": 10, "l": 10},
+        }
+        return {"data": traces, "layout": net_layout}
 
     # Fallback — return empty chart
     return {"data": [], "layout": layout}

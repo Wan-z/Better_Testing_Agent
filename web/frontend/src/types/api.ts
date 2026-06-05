@@ -73,6 +73,7 @@ export interface EdaSummary {
   n_significant: number
   n_nonlinear_only: number
   subtype_suggestive: boolean
+  n_network_edges?: number
   label_colored_by?: string | null
   top_pairs: EdaTopPair[]
   text: string
