@@ -306,6 +306,84 @@ def _spearman(x: list[float], y: list[float]) -> float:
     return _pearson(_rank_avg(x), _rank_avg(y))
 
 
+def _centered_unit(v: list[float]) -> list[float]:
+    """Mean-centre then scale to unit norm; the dot product of two such vectors is the
+    Pearson correlation. Returns zeros for a constant (zero-variance) input."""
+    n = len(v)
+    if n == 0:
+        return []
+    m = sum(v) / n
+    c = [x - m for x in v]
+    nrm = math.sqrt(sum(ci * ci for ci in c))
+    if nrm == 0.0:
+        return [0.0] * n
+    return [ci / nrm for ci in c]
+
+
+def _dot(a: list[float], b: list[float]) -> float:
+    return sum(ai * bi for ai, bi in zip(a, b))
+
+
+def _finalize_pair(
+    best_s: int, best_bid: tuple[str, str], n: int,
+    pearson: float, spearman: float, alpha: float,
+) -> PairDependence:
+    """Assemble the depth-2 PairDependence from the winning interaction + linear stats.
+
+    Shared by `maxbet` and `pairwise_screen` so the two can never diverge.
+    """
+    z = abs(best_s) / math.sqrt(n) if n > 0 else 0.0
+    p_bonf = min(1.0, 2.0 * _norm_sf(z) * len(_BIDS))   # Bonferroni across the 9 BIDs
+    significant = p_bonf < alpha
+    nonlinear_only = (
+        significant
+        and abs(pearson) < LINEAR_NULL_THRESHOLD
+        and abs(spearman) < LINEAR_NULL_THRESHOLD
+    )
+    direction = "increasing" if best_s > 0 else "decreasing" if best_s < 0 else "none"
+    form = _BID_FORM[best_bid] if significant else "INDEPENDENT"
+    # The dependency region is only reported for significant pairs; skip building it for
+    # the (usually many) non-significant pairs of a wide screen.
+    region: list[tuple[int, int]] = []
+    region_desc = ""
+    if significant:
+        sa, sb = _token_to_subset(best_bid[0]), _token_to_subset(best_bid[1])
+        pos, neg = cross_region(sa, sb, 2)
+        # When S > 0 points pile up in the positive region; when S < 0, in its complement.
+        region = pos if best_s >= 0 else neg
+        region_desc = _region_description(form, region, 2)
+    return PairDependence(
+        x="x", y="y", n=n,
+        bet_statistic_s=best_s, bet_z=z, p_value=p_bonf,
+        bid=_bid_label(best_bid), form=form,
+        direction=direction if significant else "none",
+        pearson_r=pearson, spearman_rho=spearman,
+        nonlinear_only=nonlinear_only, significant=significant,
+        depth=2, grid_size=4,
+        positive_region=region,
+        region_description=region_desc,
+    )
+
+
+@dataclass
+class _ColPrep:
+    """Per-column data reused across all of a column's pairs in `pairwise_screen`."""
+
+    signs: dict[str, list[int]]       # depth-2 interaction signs, keyed "1"/"2"/"12"
+    cn_vals: list[float]              # unit-normalised centred values (→ Pearson via dot)
+    cn_ranks: list[float]             # unit-normalised centred avg-ranks (→ Spearman)
+
+
+def _prep_column(vals: list[float], rng: random.Random) -> _ColPrep:
+    u = empirical_copula(vals, rng)
+    s1, s2, s12 = _depth2_signs(u)
+    return _ColPrep(
+        signs={"1": s1, "2": s2, "12": s12},
+        cn_vals=_centered_unit(vals),
+        cn_ranks=_centered_unit(_rank_avg(vals)),
+    )
+
+
 # ── core BET ────────────────────────────────────────────────────────────────
 
 def maxbet(
@@ -333,47 +411,7 @@ def maxbet(
             best_s = s
             best_bid = (a, b)
 
-    z = abs(best_s) / math.sqrt(n) if n > 0 else 0.0
-    p_single = 2.0 * _norm_sf(z)
-    p_bonf = min(1.0, p_single * len(_BIDS))   # Bonferroni across the 9 BIDs
-
-    pearson = _pearson(x, y)
-    spearman = _spearman(x, y)
-    significant = p_bonf < alpha
-    nonlinear_only = (
-        significant
-        and abs(pearson) < LINEAR_NULL_THRESHOLD
-        and abs(spearman) < LINEAR_NULL_THRESHOLD
-    )
-    if best_s > 0:
-        direction = "increasing"
-    elif best_s < 0:
-        direction = "decreasing"
-    else:
-        direction = "none"
-
-    form = _BID_FORM[best_bid] if significant else "INDEPENDENT"
-    sa, sb = _token_to_subset(best_bid[0]), _token_to_subset(best_bid[1])
-    pos, neg = cross_region(sa, sb, 2)
-    # When S > 0 points pile up in the positive region; when S < 0, in its complement.
-    region = pos if best_s >= 0 else neg
-    return PairDependence(
-        x="x", y="y", n=n,
-        bet_statistic_s=best_s,
-        bet_z=z,
-        p_value=p_bonf,
-        bid=_bid_label(best_bid),
-        form=form,
-        direction=direction if significant else "none",
-        pearson_r=pearson,
-        spearman_rho=spearman,
-        nonlinear_only=nonlinear_only,
-        significant=significant,
-        depth=2,
-        grid_size=4,
-        positive_region=region if significant else [],
-        region_description=_region_description(form, region, 2) if significant else "",
-    )
+    return _finalize_pair(best_s, best_bid, n, _pearson(x, y), _spearman(x, y), alpha)
 
 
 def _region_description(form: str, region: list[tuple[int, int]], d: int) -> str:
@@ -524,8 +562,26 @@ def pairwise_screen(
         )
         pairs = pairs[:max_pairs]
 
-    for k, (xa, yb) in enumerate(pairs):
-        pd = maxbet(columns[xa], columns[yb], alpha=alpha, seed=seed + k)
+    # Precompute each column's copula interaction signs and unit-normalised values/ranks
+    # once; every pair is then a handful of O(n) dot products instead of re-deriving the
+    # copula and the ranks per pair — an ~N-fold speedup on wide screens (the whole point
+    # of the depth-2 EDA screen over many columns).
+    rng = random.Random(seed)
+    needed = {name for pr in pairs for name in pr}
+    prep = {name: _prep_column(columns[name], rng) for name in names if name in needed}
+
+    for xa, yb in pairs:
+        px, py = prep[xa], prep[yb]
+        n = len(columns[xa])
+        best_s = 0
+        best_bid = ("1", "1")
+        for a, b in _BIDS:
+            s = sum(ax * by for ax, by in zip(px.signs[a], py.signs[b]))
+            if abs(s) > abs(best_s):
+                best_s, best_bid = s, (a, b)
+        pearson = _dot(px.cn_vals, py.cn_vals)
+        spearman = _dot(px.cn_ranks, py.cn_ranks)
+        pd = _finalize_pair(best_s, best_bid, n, pearson, spearman, alpha)
         pd.x, pd.y = xa, yb
         # Second-level Bonferroni across the screened pairs.
         pd.p_value = min(1.0, pd.p_value * max(1, len(pairs)))

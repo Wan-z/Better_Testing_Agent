@@ -33,6 +33,11 @@ _NUMERIC_TYPES = ("CONTINUOUS", "ORDINAL", "COUNT")
 # columns → 4 950 pairs — while still bounding pathological widths.
 _MAX_SCREEN_PAIRS = 5000
 
+# Cap on how many screened pairs are echoed into the profile payload. All significant
+# pairs are always kept; this only bounds the strongest non-significant extras so the
+# stored/transferred profile stays small (a 100-column screen has ~5 000 findings).
+_MAX_REPORTED_FINDINGS = 50
+
 
 def _is_unnamed_index(name: object) -> bool:
     """True for a pandas auto-named blank-header column (a CSV row index). Such a column
@@ -256,7 +261,12 @@ def _build_profile(df: pd.DataFrame, outcome: str | None, group: str | None) -> 
             screen = pairwise_screen(numeric_columns, max_pairs=_MAX_SCREEN_PAIRS, seed=0)
             eda_plots, eda_summary = _eda_plots_and_summary(
                 df, cols, aligned, numeric_columns, screen, group)
-            for f in screen.findings:
+            # Keep all significant pairs plus the strongest remaining ones (findings are
+            # already sorted by BET strength) so the profile payload stays small.
+            sig_findings = [f for f in screen.findings if f.significant]
+            extra = [f for f in screen.findings if not f.significant]
+            reported = sig_findings + extra[: max(0, _MAX_REPORTED_FINDINGS - len(sig_findings))]
+            for f in reported:
                 nonlinear.append({
                     "x": f.x, "y": f.y, "n": f.n,
                     "bet_statistic_s": f.bet_statistic_s,

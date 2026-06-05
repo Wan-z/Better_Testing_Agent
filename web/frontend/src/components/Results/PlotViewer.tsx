@@ -1,12 +1,26 @@
 import { useState } from 'react'
-import Plot from 'react-plotly.js'
+import PlotImport from 'react-plotly.js'
 import type { PlotSpec } from '../../types/api'
+
+// react-plotly.js is published as CommonJS with no ESM `exports` map, so under Vite's
+// dependency optimizer the default import can come back wrapped (the module/namespace
+// object) instead of the component itself. Rendering that object makes React throw
+// "Element type is invalid" and blanks the whole page. Unwrap nested `.default` until we
+// reach the real component (a class/function, or a forwardRef/memo object via $$typeof).
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function resolveComponent(mod: any): any {
+  let c = mod
+  while (c && typeof c === 'object' && !('$$typeof' in c) && 'default' in c) c = c.default
+  return c
+}
+const Plot = resolveComponent(PlotImport) as typeof PlotImport
 
 interface Props { plots: PlotSpec[] }
 
 export default function PlotViewer({ plots }: Props) {
   const [active, setActive] = useState(0)
-  const plot = plots[active]
+  const plot = plots[active] ?? plots[0]
+  if (!plot || !plot.plotly_json) return null
 
   return (
     <div className="bg-white rounded-xl border border-slate-200 p-6">

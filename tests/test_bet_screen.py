@@ -11,6 +11,7 @@ import math
 import random
 
 from hta.bet_screen import (
+    DEFAULT_ALPHA,
     LINEAR_NULL_THRESHOLD,
     cross_region,
     empirical_copula,
@@ -103,6 +104,35 @@ def test_pairwise_screen_ranks_and_flags() -> None:
     assert para.significant
     assert para.nonlinear_only
     assert res.n_nonlinear_only >= 1
+
+
+def test_pairwise_screen_matches_per_pair_maxbet() -> None:
+    # The optimised (precomputed) screen must produce exactly what calling maxbet on each
+    # pair would, plus the screen-level Bonferroni correction across the pairs.
+    rng = _rng(8)
+    n = 140
+    t = [rng.uniform(-1, 1) for _ in range(n)]
+    cols = {
+        "lin": [2 * ti + rng.gauss(0, 0.2) for ti in t],
+        "para": [ti * ti + rng.gauss(0, 0.02) for ti in t],
+        "noise": [rng.gauss(0, 1) for _ in range(n)],
+        "t": t,
+    }
+    res = pairwise_screen(cols, seed=0)
+    names = list(cols)
+    pairs = [(names[i], names[j]) for i in range(len(names)) for j in range(i + 1, len(names))]
+    npairs = len(pairs)
+    by_key = {frozenset((f.x, f.y)): f for f in res.findings}
+    for xa, yb in pairs:
+        mb = maxbet(cols[xa], cols[yb], seed=0)
+        f = by_key[frozenset((xa, yb))]
+        assert f.bid == mb.bid
+        assert f.bet_statistic_s == mb.bet_statistic_s
+        assert math.isclose(f.bet_z, mb.bet_z, rel_tol=1e-9)
+        assert math.isclose(f.pearson_r, mb.pearson_r, rel_tol=1e-7, abs_tol=1e-12)
+        assert math.isclose(f.spearman_rho, mb.spearman_rho, rel_tol=1e-7, abs_tol=1e-12)
+        assert math.isclose(f.p_value, min(1.0, mb.p_value * npairs), rel_tol=1e-9)
+        assert f.significant == (f.p_value < DEFAULT_ALPHA)
 
 
 def test_z_matches_statistic() -> None:
