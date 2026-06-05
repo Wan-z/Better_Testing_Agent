@@ -75,7 +75,9 @@ non-proportional hazards, informative censoring, prevalence-dependence). See
 ### Exploratory dependence analysis (BET)
 
 Before any test is chosen, the profiler runs a **Binary Expansion Testing** screen
-(`src/hta/bet_screen.py`) over the numeric columns, following
+(`src/hta/bet_screen.py`) over the numeric columns. BET is the framework of
+[Zhang, K. (2019), *"BET on Independence,"* JASA 114(528), 1620–1637, DOI 10.1080/01621459.2018.1537921](https://doi.org/10.1080/01621459.2018.1537921);
+the pairwise-EDA framing and tie-jittering follow its genomic application
 [Xiang, Zhang, Liu, Hoadley, Perou, Zhang & Marron (2023), *Ann. Appl. Stat.* 17(4), DOI 10.1214/23-AOAS1745](https://projecteuclid.org/journals/annals-of-applied-statistics/volume-17/issue-4/Pairwise-nonlinear-dependence-analysis-of-genomic-data/10.1214/23-AOAS1745.full) (preprint [arXiv:2202.09880](https://arxiv.org/abs/2202.09880)). For
 every pair it copula-transforms the data (jittering ties / zero-inflation), runs depth-2
 MaxBET, and reports the **form** of dependence (monotone, parabolic, "W"-bimodal,
@@ -83,6 +85,13 @@ checkerboard, linear) with its direction — flagging **nonlinear-only** pairs t
 Spearman miss. Mixture-type forms prompt the dialogue to ask which **subgroups/subtypes** drive
 the pattern (captured for stratified analysis), and the dominant form becomes the selector's
 relationship prior. This is the agent's effect-modification / heterogeneity step.
+
+The engine also provides a **two-stage Max BET** over depths (`maxbet_twostage`, the §7
+independence test) and a **dependency-region** read-out (`cross_region`) that shows *where* the
+dependence lives. Two runnable examples reproduce the paper's analyses (synthetic, deterministic):
+[`examples/stars_independence.py`](examples/stars_independence.py) (the "are stars uniformly
+scattered?" test) and [`examples/gene_pair_subtype.py`](examples/gene_pair_subtype.py) (a
+nonlinear gene pair created by a cancer-subtype mixture, with the joint-classification payoff).
 
 ## Requirements
 
@@ -126,7 +135,23 @@ HTA_LOG_LEVEL=INFO
 
 `HTA_DEFAULT_DRY_RUN=true` runs the full pipeline with realistic stub data — no API key needed.
 
-## Running the web app
+## Try it now — the playground (zero install)
+
+The quickest way to throw your own data and a question at the agent's logic — no
+dependencies, no build step, no API key:
+
+```bash
+PYTHONPATH=src python playground/app.py        # then open http://localhost:8000
+```
+
+Paste a CSV, type a hypothesis, name the outcome column (plus an optional group or
+predictor), and it profiles the variables, runs the **real BET dependence engine** over
+every numeric pair, and recommends a test via the §6.2 decision tree — with the
+dependence region drawn out. Click a sample link (stars / gene / overdose) to start.
+See [`playground/README.md`](playground/README.md). *(Group comparisons are recommended,
+not executed — that's the not-yet-built Step-6 executor.)*
+
+## Running the full web app (FastAPI + React, stubbed pipeline)
 
 ```bash
 # Terminal 1 — FastAPI backend (port 8000)
