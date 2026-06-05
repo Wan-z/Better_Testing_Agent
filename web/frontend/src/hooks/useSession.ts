@@ -21,6 +21,7 @@ export interface SessionState {
   dialogueTurn: number
   // Step 4 / 5
   progressMessage: string
+  progressStage: string
   report: Report | null
   error: string | null
 }
@@ -30,7 +31,7 @@ const INITIAL: SessionState = {
   columns: [], inferredTypes: {}, preview: [],
   variables: null,
   messages: [], studyDesign: null, dialogueTurn: 0,
-  progressMessage: '', report: null, error: null,
+  progressMessage: '', progressStage: '', report: null, error: null,
 }
 
 export function useSession() {
@@ -109,13 +110,16 @@ export function useSession() {
   // Step 4 — run analysis (streamed)
   const runAnalysis = useCallback(async () => {
     if (!state.sessionId) return
-    update({ step: 5, status: 'RUNNING', progressMessage: 'Starting analysis…' })
+    update({ step: 5, status: 'RUNNING', progressMessage: 'Starting analysis…', progressStage: '' })
 
     for await (const event of apiRunAnalysis(state.sessionId)) {
       if (event.type === 'progress' && typeof event.message === 'string') {
-        update({ progressMessage: event.message })
+        update({
+          progressMessage: event.message,
+          progressStage: typeof event.stage === 'string' ? event.stage : '',
+        })
       } else if (event.type === 'result' && event.report) {
-        update({ report: event.report as Report, status: 'COMPLETE', progressMessage: '' })
+        update({ report: event.report as Report, status: 'COMPLETE', progressMessage: '', progressStage: '' })
       }
     }
   }, [state.sessionId, update])

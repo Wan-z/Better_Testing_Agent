@@ -41,7 +41,7 @@ export interface DistributionStats {
 export interface NormalityTest {
   name: string
   statistic: number
-  p_value: number
+  p_value: number | null
   is_normal: boolean
 }
 

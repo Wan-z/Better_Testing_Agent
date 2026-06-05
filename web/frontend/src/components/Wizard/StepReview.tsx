@@ -78,10 +78,10 @@ export default function StepReview({ profile, variables, studyDesign, onRun }: P
         {/* Planned test */}
         <div className="bg-indigo-50 rounded-xl border border-indigo-200 p-5">
           <h3 className="text-sm font-semibold text-brand mb-1">Planned test</h3>
-          <p className="text-lg font-bold text-slate-900">Welch's t-test</p>
+          <p className="text-lg font-bold text-slate-900">Selected automatically</p>
           <p className="text-sm text-slate-600 mt-1">
-            Between-subjects comparison of a continuous outcome across 2 groups. Welch's variant
-            is used as the default — it does not assume equal variances.
+            HTA will select the appropriate statistical test based on your data types, study design,
+            and normality checks when you run the analysis.
           </p>
         </div>
       </div>

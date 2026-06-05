@@ -164,7 +164,7 @@ async def _stream_openai(session_id: str, history: list[dict[str, str]]) -> obje
         messages=[{"role": "system", "content": SYSTEM}] + history,  # type: ignore[arg-type]
         tools=tools,  # type: ignore[arg-type]
         stream=True,
-        max_tokens=512,
+        max_completion_tokens=512,
     )
 
     async for chunk in stream:

@@ -77,6 +77,7 @@ export default function Wizard() {
             report={state.report}
             sessionId={state.sessionId}
             progressMessage={state.progressMessage}
+            progressStage={state.progressStage}
             onReset={session.reset}
           />
         )}
