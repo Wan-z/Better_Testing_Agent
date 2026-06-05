@@ -59,3 +59,41 @@ This rewrites `overdose_ed_visits.csv` and prints a `DERIVED_JSON_BEGIN … END`
 Those figures are mirrored in `web/backend/stubs.py` and
 `web/frontend/src/api/mock.ts` so the dry-run demo stays consistent with the CSV.
 If you change the generator, re-run it and update those two files from the printed block.
+
+---
+
+# BET demonstration datasets (Zhang 2019)
+
+Two small **synthetic** datasets reproduce the two real-data analyses in
+Zhang, K. (2019), *"BET on Independence,"* JASA 114(528), 1620–1637. Each is
+generated and analysed by a self-contained script under [`../examples/`](../examples),
+and pinned by [`../tests/test_examples.py`](../tests/test_examples.py).
+
+> ⚠️ **Synthetic data.** Neither file is the original catalogue/cohort. The values are
+> *simulated* to carry the same qualitative dependence structure the paper reports, for
+> demonstration only — not astrometry, not TCGA expression data.
+
+## `bright_stars.csv` — are bright stars uniformly scattered? (paper §7)
+
+256 "stars" with galactic `longitude_deg` ∈ [0, 360) and `sin_latitude` ∈ [−1, 1]; ~2/3 lie
+along a wavy "galactic plane" band, the rest are uniform background. The band makes
+longitude and latitude **dependent but linearly uncorrelated** (Pearson r ≈ −0.07, matching
+the paper). The two-stage Max BET rejects independence and its strongest cross interaction
+(`A1A2B1`, depth 2 — the paper's interaction) localizes the band.
+
+```bash
+PYTHONPATH=src python examples/stars_independence.py   # writes the CSV + prints an ASCII band map
+```
+
+## `gene_pair_subtype.csv` — a nonlinear gene pair from a subtype mixture (paper §8)
+
+273 "samples" with two genes `DZIP1`, `NAV3` and a `subtype` label (`basal` / `other`). The
+`other` group has a positive DZIP1→NAV3 trend; the `basal` group is a disjoint high-DZIP1 /
+low-NAV3 cluster. Pooling the two creates a **nonlinear** pattern (Max BET rejects, depth-2
+parabolic form) that the subtype label explains, and the pair jointly classifies `basal`
+better (≈90% 1-NN LOO) than either gene alone (≈75% / ≈67%) — the §8.3 result. This is the
+data shape the agent's Rule-8 / `subgroup_variables` / contextual-analysis path is built for.
+
+```bash
+PYTHONPATH=src python examples/gene_pair_subtype.py
+```

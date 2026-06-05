@@ -1,33 +1,53 @@
-"""Pairwise nonlinear-dependence screening via Binary Expansion Testing (BET).
+"""Binary Expansion Testing (BET) for dependence detection and EDA.
 
-This implements the exploratory-data-analysis (EDA) workflow of
+The BET framework — binary expansion statistics (BEStat), the binary interaction
+design (BID) / Hadamard reparameterization, the symmetry statistics, and the
+**Max BET** procedure — is due to
+
+    Zhang, K. (2019). "BET on Independence." Journal of the American Statistical
+    Association, 114(528), 1620–1637. DOI: 10.1080/01621459.2018.1537921.
+
+We build on the two real-data analyses in that paper:
+
+  * **§7 (stars):** a *focused, interpretable test of independence*. Two-stage
+    empirical Max BET (search depths d = 1..d_max, second-level Bonferroni over
+    depths) detects dependence that Pearson (r = −0.07), distance correlation, and
+    Hoeffding's D all miss, and — crucially — its strongest cross interaction shows
+    *where* the dependence lives (the Milky-Way band). See `maxbet_twostage` and
+    `cross_region`.
+  * **§8 (TCGA):** a fast *EDA screen* over many pairs at depth d = 2 to surface
+    pairs whose nonlinear dependence is created by a **mixture of latent subgroups**
+    (cancer subtypes). The discovered nonlinear pair then both explains the
+    nonlinearity (via the subgroup label) and improves joint classification. See
+    `pairwise_screen` and `SUBTYPE_SUGGESTIVE_FORMS`.
+
+The depth-2 form taxonomy and the genomic-screen framing follow the downstream
+application paper:
 
     Xiang, S., Zhang, W., Liu, S., Hoadley, K. A., Perou, C. M., Zhang, K., & Marron, J. S.
     (2023). "Pairwise Nonlinear Dependence Analysis of Genomic Data."
     The Annals of Applied Statistics, 17(4). DOI: 10.1214/23-AOAS1745.
-    (Preprint: arXiv:2202.09880.)
 
-adapted as the dependence-discovery stage of the Hypothesis Testing Agent. The
-goal is to surface dependence — *especially nonlinear dependence that Pearson /
-Spearman miss* — between every pair of numeric variables, label the **form** of
-that dependence, and flag when it is driven by structure invisible to linear
-methods (a signal that latent subgroups / subtypes may be present).
-
-Method (depth d = 2, the resolution the paper recommends):
+Method:
 
 1. **Copula transform** — map each variable to the empirical copula on (0, 1] via
    ranks. This is marginal-free and robust to outliers.
 2. **Tie handling** — piled-up values (zeros, imputed values, detection limits)
    violate BET's continuity assumption, so tied observations are *jittered* by a
-   small deterministic amount before ranking (paper §3.1).
-3. **Binary expansion to depth 2** — each copula value falls in one of four
-   quarters; its first two bits give A1, A2 (and B1, B2 for the partner). With the
-   sign-coded products there are (2^2 − 1)(2^2 − 1) = 9 "cross interactions", the
-   nine Binary Interaction Designs (BIDs) of Figure 2.
-4. **Symmetry statistics** — for each BID, S = Σ Ȧ·Ḃ (difference of point counts in
-   the white vs blue regions). Under independence S ≈ 0 and Z = |S|/√n is ~N(0,1).
-5. **MaxBET** — take the BID with the largest |S|; its sign gives the direction and
-   its label gives the *form*; Bonferroni-adjust the p-value across the 9 BIDs.
+   small deterministic amount before ranking (Xiang et al. 2023 §3.1).
+3. **Binary expansion to depth d** — each copula value's first d bits place it in one
+   of 2^d bins; the sign-coded products of those bits over both variables give the
+   (2^d − 1)(2^d − 1) "cross interactions" (the BIDs of Figure 2). Depth 2 (nine BIDs)
+   is the screen default; the two-stage test searches d = 1..d_max.
+4. **Symmetry statistics** — for each cross interaction, S = Σ Ȧ·Ḃ counts points in the
+   white (+) minus the blue (−) region (Zhang 2019 §3.3). Under independence S ≈ 0.
+   With *unknown* margins (the empirical copula), (Ŝ + n)/4 is Hypergeometric(n, n/2,
+   n/2) (Thm 4.2), so Var(Ŝ) = n²/(n−1) ≈ n; we use the large-n normal approximation
+   (Kou & Ying 1996), Z = |S|/√n, which is exact to the finite-population correction.
+5. **Max BET** — take the cross interaction with the largest |S|; its sign gives the
+   direction, its region gives the interpretation, and (depth-2) its label gives the
+   *form*. Bonferroni-adjust across the cross interactions, and again across depths in
+   the two-stage procedure.
 
 The module is pure standard library (no numpy/scipy) so it is dependency-free and
 directly unit-testable; the DataProfiler wraps its output into Pydantic models.
@@ -44,6 +64,9 @@ DEFAULT_ALPHA = 0.05
 # |r| below which a linear/monotone coefficient is treated as "no linear signal";
 # a BET-significant pair under this threshold is flagged as nonlinear-only.
 LINEAR_NULL_THRESHOLD = 0.10
+# Default maximum depth for the two-stage Max BET search (Zhang 2019 §4.5 recommends
+# d_max = 4 as a good approximation to the true distribution).
+DEFAULT_D_MAX = 4
 
 # The 9 depth-2 BIDs as (X-interaction, Y-interaction) over {"1", "2", "12"}, where
 # "1"/"2" are the first/second binary-expansion bits and "12" their product.
@@ -64,8 +87,8 @@ _BID_FORM = {
     ("12", "2"): "COMPLEX",        # A1A2B2  ┐ higher-order asymmetric
     ("2", "12"): "COMPLEX",        # A2B1B2  ┘ (reflection)
 }
-# Forms whose typical cause is a mixture of latent subpopulations — the paper's
-# subtype-driven patterns. Used to prompt the subgroup question in the dialogue.
+# Forms whose typical cause is a mixture of latent subpopulations — the subtype-driven
+# patterns of Zhang (2019) §8. Used to prompt the subgroup question in the dialogue.
 SUBTYPE_SUGGESTIVE_FORMS = {"CHECKERBOARD", "SINUSOIDAL", "PARABOLIC"}
 
 
@@ -86,6 +109,15 @@ class PairDependence:
     spearman_rho: float
     nonlinear_only: bool          # BET-significant but |Pearson| and |Spearman| small
     significant: bool
+    # ── interpretation: where the dependence lives (Zhang 2019 §7/§8) ──────────
+    depth: int = 2                # binary-expansion depth of the dominant interaction
+    grid_size: int = 4            # 2**depth — the copula grid is grid_size × grid_size
+    # Cells (row, col) of the copula grid in the dominant interaction's *positive*
+    # region, row 0 = bottom (V≈0), col 0 = left (U≈0). Points concentrate here when
+    # the symmetry statistic is positive (and in the complementary cells when it is
+    # negative). This is the shaded region the agent plots / describes.
+    positive_region: list[tuple[int, int]] = field(default_factory=list)
+    region_description: str = ""  # short human summary of the dependence region
 
 
 @dataclass
@@ -111,8 +143,8 @@ def _ranks_jittered(values: list[float], rng: random.Random) -> list[float]:
     """Strictly-increasing ranks 1..n, breaking ties by deterministic jitter.
 
     Tied values are spread within a small fraction of the smallest positive gap so
-    the empirical copula stays continuous (paper §3.1) without changing the order
-    of the distinct values.
+    the empirical copula stays continuous (Xiang et al. 2023 §3.1) without changing the
+    order of the distinct values.
     """
     n = len(values)
     distinct = sorted(set(values))
@@ -149,6 +181,64 @@ def _depth2_signs(u: list[float]) -> tuple[list[int], list[int], list[int]]:
         s2.append(a2)
         s12.append(a1 * a2)
     return s1, s2, s12
+
+
+# ── general depth-d interactions and dependency regions ───────────────────────
+
+def _bin_index(val: float, d: int) -> int:
+    """Index 0..2^d−1 of the bin a copula value falls in at depth d (bit 1 = high)."""
+    g = 1 << d
+    return min(g - 1, int(val * g)) if val < 1.0 else g - 1
+
+
+def _nonempty_subsets(d: int) -> list[tuple[int, ...]]:
+    """All nonempty subsets of bits {1..d}, as sorted tuples (the BID generators)."""
+    return [
+        tuple(k for k in range(1, d + 1) if mask & (1 << (k - 1)))
+        for mask in range(1, 1 << d)
+    ]
+
+
+def _subset_sign(index: int, subset: tuple[int, ...], d: int) -> int:
+    """Sign (±1) of the binary-interaction variable `subset` for bin `index`."""
+    s = 1
+    for k in subset:
+        bit = (index >> (d - k)) & 1   # bit 1 is the high bit
+        s *= 2 * bit - 1
+    return s
+
+
+def _interaction_signs(u_vals: list[float], d: int) -> dict[tuple[int, ...], list[int]]:
+    """Per-observation ±1 signs for every nonempty bit-subset interaction at depth d."""
+    bins = [_bin_index(v, d) for v in u_vals]
+    return {
+        sub: [_subset_sign(b, sub, d) for b in bins]
+        for sub in _nonempty_subsets(d)
+    }
+
+
+def cross_region(
+    sa: tuple[int, ...], sb: tuple[int, ...], d: int
+) -> tuple[list[tuple[int, int]], list[tuple[int, int]]]:
+    """Positive / negative cells of the cross interaction Ȧ_sa·Ḃ_sb on the 2^d grid.
+
+    Returns ``(positive_cells, negative_cells)`` where each cell is ``(row, col)`` with
+    row 0 = bottom (V≈0) and col 0 = left (U≈0). The two regions partition the grid
+    into equal halves (the BID's defining property, Zhang 2019 §3.3 / Fig. 2).
+    """
+    g = 1 << d
+    pos: list[tuple[int, int]] = []
+    neg: list[tuple[int, int]] = []
+    for row in range(g):          # V (Y) bin index
+        for col in range(g):      # U (X) bin index
+            sign = _subset_sign(col, sa, d) * _subset_sign(row, sb, d)
+            (pos if sign > 0 else neg).append((row, col))
+    return pos, neg
+
+
+def _token_to_subset(token: str) -> tuple[int, ...]:
+    """Depth-2 BID token ('1' / '2' / '12') -> bit subset tuple."""
+    return tuple(int(ch) for ch in token)
 
 
 def _pearson(x: list[float], y: list[float]) -> float:
@@ -228,18 +318,36 @@ def maxbet(
     else:
         direction = "none"
 
+    form = _BID_FORM[best_bid] if significant else "INDEPENDENT"
+    sa, sb = _token_to_subset(best_bid[0]), _token_to_subset(best_bid[1])
+    pos, neg = cross_region(sa, sb, 2)
+    # When S > 0 points pile up in the positive region; when S < 0, in its complement.
+    region = pos if best_s >= 0 else neg
     return PairDependence(
         x="x", y="y", n=n,
         bet_statistic_s=best_s,
         bet_z=z,
         p_value=p_bonf,
         bid=_bid_label(best_bid),
-        form=_BID_FORM[best_bid] if significant else "INDEPENDENT",
+        form=form,
         direction=direction if significant else "none",
         pearson_r=pearson,
         spearman_rho=spearman,
         nonlinear_only=nonlinear_only,
         significant=significant,
+        depth=2,
+        grid_size=4,
+        positive_region=region if significant else [],
+        region_description=_region_description(form, region, 2) if significant else "",
+    )
+
+
+def _region_description(form: str, region: list[tuple[int, int]], d: int) -> str:
+    """One-line summary of where points concentrate, for reports / plot captions."""
+    g = 1 << d
+    return (
+        f"Excess points concentrate in {len(region)} of {g * g} copula cells "
+        f"(the {form.lower()} region) at depth {d}."
     )
 
 
@@ -257,6 +365,106 @@ def relationship_form(form: str) -> str:
     if form in ("PARABOLIC", "SINUSOIDAL", "CHECKERBOARD", "COMPLEX"):
         return "nonlinear"
     return "unknown"
+
+
+def _subsets_label(sa: tuple[int, ...], sb: tuple[int, ...]) -> str:
+    a = "".join(str(k) for k in sa)
+    b = "".join(str(k) for k in sb)
+    return _bid_label((a, b))
+
+
+def _classify_form(sa: tuple[int, ...], sb: tuple[int, ...], d: int) -> str:
+    """Coarse DependenceForm for a winning cross interaction at any depth."""
+    if d == 2:
+        ta = "".join(str(k) for k in sa)
+        tb = "".join(str(k) for k in sb)
+        named = _BID_FORM.get((ta, tb))
+        if named:
+            return named
+    full = tuple(range(1, d + 1))
+    if sa == (1,) and sb == (1,):
+        return "MONOTONE"
+    if sa == full and sb == full:
+        return "LINEAR"
+    return "COMPLEX"
+
+
+def maxbet_twostage(
+    x: list[float],
+    y: list[float],
+    alpha: float = DEFAULT_ALPHA,
+    d_max: int = DEFAULT_D_MAX,
+    seed: int = 0,
+) -> PairDependence:
+    """Two-stage empirical Max BET over depths d = 1..d_max (Zhang 2019 §4.5, §7).
+
+    A focused, confirmatory test of independence for a single pair. Stage 1 runs
+    Max BET at each depth (Bonferroni across that depth's cross interactions);
+    stage 2 Bonferroni-adjusts across the d_max depths. The winning interaction's
+    `positive_region` shows *where* the dependence is — BET's signature advantage
+    over a single p-value (the Milky-Way band in §7). Unlike the fixed depth-2
+    `maxbet` screen, this adapts the resolution to the data.
+    """
+    if len(x) != len(y):
+        raise ValueError("x and y must have equal length")
+    n = len(x)
+    rng = random.Random(seed)
+    u = empirical_copula(x, rng)
+    v = empirical_copula(y, rng)
+
+    best: tuple[float, int, tuple[int, ...], tuple[int, ...], int, float] | None = None
+    for d in range(1, d_max + 1):
+        xs = _interaction_signs(u, d)
+        ys = _interaction_signs(v, d)
+        subsets = _nonempty_subsets(d)
+        n_cross = len(subsets) ** 2
+        best_s = 0
+        best_sa = best_sb = subsets[0]
+        for sa in subsets:
+            sxa = xs[sa]
+            for sb in subsets:
+                s = sum(ax * by for ax, by in zip(sxa, ys[sb]))
+                if abs(s) > abs(best_s):
+                    best_s, best_sa, best_sb = s, sa, sb
+        z = abs(best_s) / math.sqrt(n) if n > 0 else 0.0
+        p_within = min(1.0, 2.0 * _norm_sf(z) * n_cross)   # Bonferroni across cross interactions
+        if best is None or p_within < best[0]:
+            best = (p_within, d, best_sa, best_sb, best_s, z)
+
+    assert best is not None                                # d_max ≥ 1, so the loop ran
+    p_within, d, sa, sb, best_s, z = best
+    p_overall = min(1.0, p_within * d_max)                 # stage-2 Bonferroni across depths
+    significant = p_overall < alpha
+
+    pearson = _pearson(x, y)
+    spearman = _spearman(x, y)
+    nonlinear_only = (
+        significant
+        and abs(pearson) < LINEAR_NULL_THRESHOLD
+        and abs(spearman) < LINEAR_NULL_THRESHOLD
+    )
+    form = _classify_form(sa, sb, d) if significant else "INDEPENDENT"
+    pos, neg = cross_region(sa, sb, d)
+    region = pos if best_s >= 0 else neg
+    direction = "increasing" if best_s > 0 else "decreasing" if best_s < 0 else "none"
+
+    return PairDependence(
+        x="x", y="y", n=n,
+        bet_statistic_s=best_s,
+        bet_z=z,
+        p_value=p_overall,
+        bid=_subsets_label(sa, sb),
+        form=form,
+        direction=direction if significant else "none",
+        pearson_r=pearson,
+        spearman_rho=spearman,
+        nonlinear_only=nonlinear_only,
+        significant=significant,
+        depth=d,
+        grid_size=1 << d,
+        positive_region=region if significant else [],
+        region_description=_region_description(form, region, d) if significant else "",
+    )
 
 
 def pairwise_screen(

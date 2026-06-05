@@ -244,16 +244,20 @@ Severity thresholds (proposed defaults, pending Statistician A sign-off):
 
 ## Step 3a — BET exploratory dependence screen ✅ DONE (engine + tests)
 
-**Goal:** Implement the pairwise nonlinear-dependence EDA of **Xiang et al. (2023), *Ann.
-Appl. Stat.* 17(4), DOI 10.1214/23-AOAS1745** (preprint arXiv:2202.09880) as the
-profiler's discovery stage.
-**Files created:** `src/hta/bet_screen.py`, `tests/test_bet_screen.py`
+**Goal:** Implement BET dependence detection — the framework of **Zhang, K. (2019), "BET on
+Independence," *JASA* 114(528), 1620–1637, DOI 10.1080/01621459.2018.1537921**, and its
+pairwise-EDA application **Xiang et al. (2023), *Ann. Appl. Stat.* 17(4), DOI
+10.1214/23-AOAS1745** (preprint arXiv:2202.09880) — as the profiler's discovery stage.
+**Files created:** `src/hta/bet_screen.py`, `tests/test_bet_screen.py`,
+`examples/stars_independence.py`, `examples/gene_pair_subtype.py`, `tests/test_examples.py`
 
 ### `bet_screen.py` — public API
 
 ```python
 def empirical_copula(values: list[float], rng: random.Random) -> list[float]: ...
 def maxbet(x: list[float], y: list[float], alpha=0.05, seed=0) -> PairDependence: ...
+def maxbet_twostage(x, y, alpha=0.05, d_max=4, seed=0) -> PairDependence: ...  # §7 two-stage
+def cross_region(sa, sb, d) -> tuple[list, list]:  # positive/negative cells of a BID
 def pairwise_screen(columns: dict[str, list[float]], alpha=0.05,
                     max_pairs: int | None = None, seed=0) -> ScreenResult: ...
 def relationship_form(form: str) -> str:  # -> "linear" | "monotone" | "nonlinear"
@@ -263,10 +267,19 @@ def relationship_form(form: str) -> str:  # -> "linear" | "monotone" | "nonlinea
   zero-inflation / imputed values that break BET's continuity assumption.
 - [x] Depth-2 MaxBET over the 9 BIDs; symmetry statistic `S`, `Z = |S|/√n`, two-level
   Bonferroni (across BIDs and across screened pairs).
+- [x] **Two-stage Max BET** (`maxbet_twostage`, `d_max=4`, Zhang 2019 §4.5/§7): searches
+  depths d=1..d_max with a second Bonferroni across depths — a confirmatory single-pair
+  independence test that adapts resolution beyond the fixed depth-2 screen.
+- [x] **Dependency-region interpretation** (`cross_region`; `PairDependence.positive_region`,
+  `region_description`): the dominant cross interaction's cells on the 2^d×2^d grid show
+  *where* the dependence lives (the §7 "Milky-Way band"), feeding a `PlotSpec`.
 - [x] Dominant-BID → `DependenceForm` + direction (sign of `S`); `nonlinear_only` flag when
   BET-significant but |Pearson| and |Spearman| are both < 0.10.
 - [x] Pure standard library (no numpy/scipy/R) so the depth-2 screen runs anywhere; the
   profiler wraps `PairDependence` into `DependenceFinding` models.
+- [x] **Two worked examples** reproducing the paper's analyses (synthetic, deterministic):
+  `examples/stars_independence.py` (§7) and `examples/gene_pair_subtype.py` (§8, incl. the
+  §8.3 joint-classification result), pinned by `tests/test_examples.py`.
 
 ### `tests/test_bet_screen.py` — required cases (all passing)
 
@@ -279,14 +292,22 @@ def relationship_form(form: str) -> str:  # -> "linear" | "monotone" | "nonlinea
 | `test_tie_jitter_no_crash_and_valid_copula` | 50% tied zeros → valid distinct copula |
 | `test_pairwise_screen_ranks_and_flags` | screen sorts by Z; flags the nonlinear-only pair |
 | `test_z_matches_statistic` | `Z == |S|/√n` |
+| `test_cross_region_partitions_grid` | a BID splits the 2^d grid into two equal halves |
+| `test_maxbet_populates_region_when_significant` | significant pair → non-empty `positive_region` |
+| `test_twostage_detects_nonlinear_band_missed_by_correlation` | depth>2 band: BET rejects, Pearson ≈ 0 |
+| `test_twostage_quiet_under_independence` | independent → not significant, empty region |
 
-**Gate:** `pytest tests/test_bet_screen.py` → 7 passing, 0 failing. *(Verified with a stdlib
-runner — the engine has no third-party deps.)*
+`tests/test_examples.py` adds two regression cases pinning the worked examples:
+`test_stars_independence_detected_but_not_by_correlation` and
+`test_gene_pair_nonlinear_and_joint_beats_marginals`.
 
-> **Note on the full d>2 / cross-all-pairs paper pipeline:** the v0.1.0 screen uses depth
-> d=2 (the paper's recommended resolution) and the pure-Python symmetry statistic. The R
-> `BET::MaxBET` path (Step 6 executor) remains the route for confirmatory BET with the
-> normalised-MI supplement; the EDA screen here is for fast discovery + interpretation.
+**Gate:** `pytest tests/test_bet_screen.py tests/test_examples.py` → 13 passing, 0 failing.
+*(Verified with `PYTHONPATH=src python -m pytest`; the engine has no third-party deps.)*
+
+> **Note on the d>2 pipeline:** the fast screen uses depth d=2 (the recommended EDA
+> resolution); `maxbet_twostage` now provides the pure-Python **two-stage search over depths
+> d=1..d_max** (Zhang 2019 §4.5) for confirmatory single-pair tests. The R `BET::MaxBET` path
+> (Step 6 executor) remains the route for the normalised-MI supplement.
 
 ---
 
@@ -676,7 +697,7 @@ PRISMA. The `methods_text` should follow that guideline's checklist and name it.
 | Test type | Plots |
 |---|---|
 | Two-group comparison | Boxplot (groups × outcome), QQ-plot per group |
-| Correlation / BET | Scatter (x vs y) |
+| Correlation / BET | Scatter (x vs y); for BET, a shaded copula heat-cell overlay of the dominant cross interaction's `positive_region` (the dependence region, §5.1a) |
 | 3+ groups | Boxplot (all groups), QQ-plot per group |
 | Categorical | Stacked bar (counts), mosaic optional |
 | Count / rate | Bar of rates (+ offset), residual check for overdispersion |

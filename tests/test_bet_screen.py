@@ -12,8 +12,10 @@ import random
 
 from hta.bet_screen import (
     LINEAR_NULL_THRESHOLD,
+    cross_region,
     empirical_copula,
     maxbet,
+    maxbet_twostage,
     pairwise_screen,
     relationship_form,
 )
@@ -108,3 +110,51 @@ def test_z_matches_statistic() -> None:
     y = [xi + rng.gauss(0, 0.5) for xi in x]
     res = maxbet(x, y, seed=0)
     assert math.isclose(res.bet_z, abs(res.bet_statistic_s) / math.sqrt(res.n), rel_tol=1e-9)
+
+
+# ── Zhang (2019) additions: regions and two-stage Max BET ─────────────────────
+
+def test_cross_region_partitions_grid() -> None:
+    # A cross interaction splits the 2^d × 2^d copula grid into two equal halves
+    # (the BID's defining symmetry, Zhang 2019 §3.3 / Fig. 2).
+    for d in (1, 2, 3):
+        g = 1 << d
+        pos, neg = cross_region(tuple(range(1, d + 1)), (1,), d)
+        assert len(pos) == len(neg) == g * g // 2
+        assert set(pos).isdisjoint(neg)
+        assert len(set(pos) | set(neg)) == g * g
+
+
+def test_maxbet_populates_region_when_significant() -> None:
+    rng = _rng(3)
+    x = [rng.uniform(-1, 1) for _ in range(500)]
+    y = [xi * xi + rng.gauss(0, 0.02) for xi in x]
+    res = maxbet(x, y, seed=3)
+    assert res.significant
+    assert res.positive_region                      # non-empty
+    assert len(res.positive_region) == res.grid_size ** 2 // 2
+    assert res.region_description                    # human summary present
+
+
+def test_twostage_detects_nonlinear_band_missed_by_correlation() -> None:
+    # A cosine band (the §7 "Milky Way" flavour): strong dependence, ~zero Pearson,
+    # and a structure that needs depth > 2 — so the two-stage search is what catches it.
+    rng = _rng(4)
+    x = [rng.uniform(0, 1) for _ in range(256)]
+    y = [0.5 + 0.4 * math.cos(4 * math.pi * xi) + rng.gauss(0, 0.05) for xi in x]
+    res = maxbet_twostage(x, y, seed=1)
+    assert res.significant
+    assert abs(res.pearson_r) < LINEAR_NULL_THRESHOLD
+    assert res.depth >= 2
+    assert res.positive_region                       # shows where the dependence lives
+    assert relationship_form(res.form) in ("nonlinear", "monotone")
+
+
+def test_twostage_quiet_under_independence() -> None:
+    rng = _rng(5)
+    x = [rng.gauss(0, 1) for _ in range(300)]
+    y = [rng.gauss(0, 1) for _ in range(300)]
+    res = maxbet_twostage(x, y, seed=2)
+    assert not res.significant
+    assert res.form == "INDEPENDENT"
+    assert res.positive_region == []

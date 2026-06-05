@@ -233,9 +233,14 @@ Responsibilities:
 
 #### 5.1a Exploratory dependence analysis — BET pairwise screen
 
-Following **Xiang, Zhang, Liu, Hoadley, Perou, Zhang & Marron (2023), "Pairwise Nonlinear
-Dependence Analysis of Genomic Data," *The Annals of Applied Statistics* 17(4),
-DOI [10.1214/23-AOAS1745](https://doi.org/10.1214/23-AOAS1745)** (preprint arXiv:2202.09880),
+Building on the BET framework of **Zhang, K. (2019), "BET on Independence," *Journal of the
+American Statistical Association* 114(528), 1620–1637, DOI
+[10.1080/01621459.2018.1537921](https://doi.org/10.1080/01621459.2018.1537921)** — which
+introduced binary expansion statistics (BEStat), the Max BET procedure, and the binary
+interaction design (BID) reparameterization — and following its genomic application **Xiang,
+Zhang, Liu, Hoadley, Perou, Zhang & Marron (2023), "Pairwise Nonlinear Dependence Analysis of
+Genomic Data," *The Annals of Applied Statistics* 17(4), DOI
+[10.1214/23-AOAS1745](https://doi.org/10.1214/23-AOAS1745)** (preprint arXiv:2202.09880),
 the profiler runs a deterministic EDA pass over the
 CONTINUOUS/COUNT/ORDINAL columns *before* any test is selected, implemented in
 `hta/bet_screen.py` (pure-stdlib, no R/numpy needed for the depth-2 screen):
@@ -244,25 +249,52 @@ CONTINUOUS/COUNT/ORDINAL columns *before* any test is selected, implemented in
    rank, making the analysis marginal-free and outlier-robust.
 2. **Tie / discreteness handling** — piled-up values (zeros, imputed values, detection
    limits — pervasive in healthcare data) break BET's continuity assumption, so tied
-   observations are **jittered** by a tiny deterministic amount before ranking (paper §3.1).
-   The tie fraction is recorded as a data-quality note.
+   observations are **jittered** by a tiny deterministic amount before ranking (Xiang et al.
+   2023 §3.1). The tie fraction is recorded as a data-quality note.
 3. **MaxBET at depth d = 2** — for every pair, the nine Binary Interaction Designs (BIDs)
    are scored by their symmetry statistic `S`; the strongest |S| is taken, Bonferroni-adjusted
-   across the 9 BIDs and across all screened pairs (the paper's two-level adjustment).
+   across the 9 BIDs and across all screened pairs (a two-level adjustment: across BIDs, then
+   across pairs).
 4. **Form + direction** — the dominant BID labels the *form* of dependence
    (`DependenceForm`: MONOTONE, PARABOLIC, SINUSOIDAL/"W"-bimodal, CHECKERBOARD, LINEAR,
    COMPLEX) and the sign of `S` gives the direction. This interpretability is BET's advantage
    over a single correlation coefficient.
 5. **Nonlinear-only flag** — a pair that is BET-significant while |Pearson| and |Spearman|
-   are both small is flagged `nonlinear_only`. This is the paper's headline: much real
+   are both small is flagged `nonlinear_only`. This is BET's headline finding: much real
    dependence is invisible to linear methods.
 
 Each pair becomes a `DependenceFinding` on `DataProfile.nonlinear_dependencies` (ranked by
 BET `Z`). These feed two downstream consumers: the **dialogue** (a nonlinear/mixture-type
 finding triggers the subgroup question, §7.2 Rule 8) and the **selector** (the dominant form
 becomes the `relationship` prior, §6.2). Mixture-type forms (CHECKERBOARD/SINUSOIDAL/
-PARABOLIC) are the paper's *subtype-driven* patterns — the EDA's signal that latent subgroups
-may explain the dependence.
+PARABOLIC) are *subtype-driven* patterns (the §8 TCGA finding) — the EDA's signal that latent
+subgroups may explain the dependence.
+
+**Two capabilities carried over from Zhang (2019).** The engine exposes both BET workflows the
+2019 paper demonstrates on real data:
+
+1. **Two-stage Max BET over depths** (`maxbet_twostage`, default `d_max = 4`, §4.5): a focused,
+   confirmatory independence test for a single pair that searches depths *d* = 1..d_max with a
+   second-level Bonferroni across depths, instead of the fixed depth-2 screen. It adapts the
+   resolution to the data — catching dependence (e.g. a higher-depth band) that the depth-2
+   screen misses.
+2. **Dependency-region interpretation** (`cross_region`; `PairDependence.positive_region` /
+   `region_description`): on rejection, the dominant cross interaction's positive/negative cells
+   on the 2^d × 2^d copula grid show *where* the dependence lives. This is BET's signature
+   advantage over a single p-value, and feeds a `PlotSpec` (a shaded copula heat-cell overlay).
+
+Under the empirical copula (unknown margins) the symmetry statistic's exact null is
+hypergeometric — `(Ŝ + n)/4 ∼ Hypergeometric(n, n/2, n/2)` (Zhang 2019, Thm 4.2), so
+`Var(Ŝ) = n²/(n−1) ≈ n` — and we use the large-*n* normal approximation `Z = |S|/√n` (Kou &
+Ying 1996), exact to the finite-population correction.
+
+Two worked examples reproduce the paper's analyses (synthetic data, deterministic) and double as
+regression tests (`tests/test_examples.py`):
+
+| Example | Paper §  | What it shows |
+|---|---|---|
+| `examples/stars_independence.py` | §7 (stars) | Two-stage Max BET rejects independence (Pearson r ≈ −0.07 sees nothing) and its region draws the "Milky-Way band" — detection **and** interpretation. |
+| `examples/gene_pair_subtype.py` | §8 (TCGA)  | A depth-2 screen flags a nonlinear gene pair created by a **subtype mixture**; the subtype label explains it (contextual view), and the pair jointly classifies the subtype better than either gene alone (§8.3). Mirrors the agent's Rule-8 / subgroup path. |
 
 ### 5.2 DesignDialogue (`modules/dialogue.py`) — Step 4
 
@@ -318,7 +350,7 @@ Responsibilities:
 - Executes BET/MaxBET/BEAST via the **rpy2** bridge to the R `BET` package (v0.5.4+); see §6 and §12 for setup
 - Computes appropriate effect size with 95% CI (see §6 for per-test details)
 - Runs and records all relevant assumption checks before the main test
-- Reports power when computable
+- Reports *sensitivity power* only — the minimum detectable effect at the observed N (α = 0.05, target power = 0.80) via `statsmodels.stats.power`; **never** observed/post-hoc power, which is a deterministic function of the p-value and adds no information (§5.6.1 caveat, resolves issue #4)
 
 ### 5.6 Reporter (`modules/reporter.py`) — Step 7
 
@@ -335,7 +367,7 @@ Responsibilities:
 | Severity | Condition |
 |---|---|
 | `CRITICAL` | Any `AssumptionCheck` has `status == VIOLATED` |
-| `WARNING` | `power < 0.80` when computable |
+| `WARNING` | Sensitivity power weak — minimum detectable effect > 0.5 (only a large effect is detectable at the observed N) |
 | `WARNING` | `0.01 ≤ p_value ≤ 0.05` (marginal result) |
 | `WARNING` | Effect size is small (Cohen's d < 0.2 or Cramér's V < 0.1) and result is significant |
 | `INFO` | Multiple groups tested without multiple-comparison correction |
@@ -606,13 +638,15 @@ are listed in the implementation chat log and the README references.
 
 ### BET (Binary Expansion Testing) — methodology note
 
-BET was developed by Kai Zhang (UNC Chapel Hill) and is described in *"BET on Independence"* (JASA, 2019). Its application to pairwise nonlinear-dependence exploratory analysis — the basis for the EDA screen in §5.1a — is Xiang, Zhang, Liu, Hoadley, Perou, Zhang & Marron (2023), *"Pairwise Nonlinear Dependence Analysis of Genomic Data,"* The Annals of Applied Statistics 17(4), DOI [10.1214/23-AOAS1745](https://doi.org/10.1214/23-AOAS1745) (preprint arXiv:2202.09880). BET is the appropriate choice when the user suspects any form of statistical dependence between two continuous variables that is not necessarily linear or monotone.
+BET was developed by Kai Zhang (UNC Chapel Hill) in *"BET on Independence,"* **Journal of the American Statistical Association 114(528), 1620–1637 (2019), DOI [10.1080/01621459.2018.1537921](https://doi.org/10.1080/01621459.2018.1537921)**. Its application to pairwise nonlinear-dependence exploratory analysis — the basis for the EDA screen in §5.1a — is Xiang, Zhang, Liu, Hoadley, Perou, Zhang & Marron (2023), *"Pairwise Nonlinear Dependence Analysis of Genomic Data,"* The Annals of Applied Statistics 17(4), DOI [10.1214/23-AOAS1745](https://doi.org/10.1214/23-AOAS1745) (preprint arXiv:2202.09880). BET is the appropriate choice when the user suspects any form of statistical dependence between two continuous variables that is not necessarily linear or monotone.
+
+**Two implementations in this codebase.** (1) A pure-Python engine (`src/hta/bet_screen.py`, §5.1a) powers the profiler's EDA screen (depth 2) and the two-stage confirmatory test (`maxbet_twostage`, `d_max = 4` per Zhang 2019 §4.5) — no R/numpy needed. (2) The R `BET` bridge described below is the executor path (Step 6), used for the confirmatory run with the normalised-MI supplement; its `max.depth` default differs because it is the R package's own convention.
 
 **Algorithm:**
 1. Rank-transform both variables to [0, 1] via the empirical CDF (producing the empirical copula).
 2. Binary-expand each observation to depth *d* — i.e., extract the first *d* bits of its binary representation.
 3. Compute cross-product symmetry statistics for all binary digit pairs via the Hadamard transform. These are complete sufficient statistics for any form of dependence in the copula.
-4. The test statistic is the maximum symmetry statistic across all combinations and depths; the reference distribution is chi-squared.
+4. **Max BET** is the test: take the maximum absolute symmetry statistic over all cross interactions (and, in the two-stage form, over depths *d* = 1..d_max), then Bonferroni-adjust across those cross interactions and depths. Each symmetry statistic's null is binomial (known margins) or hypergeometric (unknown margins, empirical copula), with the large-*n* normal approximation. (The aggregate sum-of-squares of all symmetry statistics recovers the classical χ² statistic, but Max BET deliberately uses the *maximum* — it is more powerful against sparse, few-interaction dependence and yields the interpretable region.)
 
 **Variants:**
 
@@ -807,8 +841,8 @@ Key requirements:
 
 Key requirements:
 - Accept DataFrame, list of dicts, CSV string, or dict of lists
-- Infer variable types by the rules in §5.1
-- Shapiro-Wilk (N ≤ 2000) or KS test (N > 2000) for normality
+- Infer variable types by the healthcare-aware rules in §5.1 / §6.5
+- Normality *severity* — graded `NONE`/`MILD`/`STRONG` (§6.1), not a binary gate: Shapiro–Wilk corroborates at N ≤ 2000; above N = 2000 no formal test is run (the KS-vs-estimated-parameters path was dropped) and severity comes from skew/kurtosis magnitude alone
 - Data quality notes: missingness >5%, constant variables, outliers |Z| > 3.5
 
 **Deliverable:** `tests/test_profiler.py` — normal/skewed distributions, categorical detection, missing data, grouped profiling.
@@ -848,7 +882,7 @@ Key requirements:
 **Goal:** `src/hta/modules/executor.py` — runs the selected test and returns `TestResult`
 
 Key requirements:
-- Implements all 11 existing test + effect size combinations in §6
+- Implements every selectable test + effect-size combination in §6 — no longer just the original 11: now also `WELCH_ANOVA`, the count (`POISSON_REGRESSION` / `NEGATIVE_BINOMIAL_REGRESSION`), survival (`LOG_RANK` / `COX_REGRESSION`), and diagnostic (`ROC_AUC`) families, plus the BET `MAXBET` / `BEAST` bridge
 - Implements BET/MaxBET/BEAST via rpy2 bridge (see §6 BET methodology note); `rpy2` added as a runtime dependency in `pyproject.toml`
 - Assumption checks before the main test (normality, variance homogeneity, sample size adequacy; continuity and depth-adequacy checks for BET)
 - Uses scipy, pingouin, and/or statsmodels for non-BET tests
@@ -862,7 +896,7 @@ Key requirements:
 **Goal:** `src/hta/modules/reporter.py` — assembles `Report` from upstream outputs
 
 Key requirements:
-- All 6 deterministic caveat rules implemented (§5.6.1)
+- All deterministic caveat rules implemented — the 6 general rules (§5.6.1) plus the healthcare caveat catalog H1–H9 (§6.7)
 - Generates `PlotSpec` objects for distribution, box plots, QQ-plots, scatter
 - GPT-5.4 (Azure OpenAI) calls for `plain_language_summary` and `methods_text`
 
@@ -908,7 +942,7 @@ These are open methodological questions raised during design review. They are fl
 
 3. **Welch vs. Student via a variance pretest (Levene) repeats the same pretest problem.** Current §6 logic chooses Student's t when variances are "equal." The modern recommendation is to use Welch's t unconditionally for between-subjects continuous comparisons — it is nearly as powerful under equal variances and far safer under unequal variances, with no pretest. Recommendation: consider making `WELCH_T` the default and reserving `INDEPENDENT_T` for an explicit user override. **→ Resolved in §6.1/§6.2: `WELCH_T` (and `WELCH_ANOVA` for 3+ groups) is the default with no variance pretest; the equal-variance forms require `force_student`.**
 
-4. **"Report power when computable" risks reporting observed (post-hoc) power.** Observed power is a deterministic monotone function of the p-value and adds no information; APA and most methodologists discourage it. Recommendation: report *a priori* or *sensitivity* power (minimum detectable effect at the observed N) instead, and never compute power from the observed effect size. The `WARNING: power < 0.80` caveat (§5.6.1) should be re-specified accordingly.
+4. **"Report power when computable" risks reporting observed (post-hoc) power.** Observed power is a deterministic monotone function of the p-value and adds no information; APA and most methodologists discourage it. Recommendation: report *a priori* or *sensitivity* power (minimum detectable effect at the observed N) instead, and never compute power from the observed effect size. The `WARNING: power < 0.80` caveat (§5.6.1) should be re-specified accordingly. **→ Resolved in §5.5 / §5.6.1: only *sensitivity power* (minimum detectable effect at the observed N, α = 0.05, power = 0.80) is reported; observed power is never computed, and the underpowered caveat now triggers when the minimum detectable effect > 0.5 (large-effect-only).**
 
 ### Scope / consistency gaps
 
