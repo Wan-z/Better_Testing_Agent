@@ -28,6 +28,18 @@ store = LocalStorage()
 
 _NUMERIC_TYPES = ("CONTINUOUS", "ORDINAL", "COUNT")
 
+# Upper bound on pairs screened by the BET EDA (the p-values are Bonferroni-corrected
+# across them). High enough to fully cover wide dependence-screen datasets — e.g. 100
+# columns → 4 950 pairs — while still bounding pathological widths.
+_MAX_SCREEN_PAIRS = 5000
+
+
+def _is_unnamed_index(name: object) -> bool:
+    """True for a pandas auto-named blank-header column (a CSV row index). Such a column
+    is an artefact, not a variable, so it must be kept out of the pairwise screen."""
+    s = str(name).strip()
+    return s == "" or s.startswith("Unnamed:")
+
 
 def _infer_types(df: pd.DataFrame) -> dict[str, str]:
     """Full VariableType inference via the engine's profiler (CONTINUOUS/ORDINAL/
@@ -38,6 +50,138 @@ def _infer_types(df: pd.DataFrame) -> dict[str, str]:
         col: profile_column(col, df[col].astype(str).tolist()).var_type
         for col in df.columns
     }
+
+
+def _interaction_plotspec(
+    ip: Any, *, color_by: str = "interaction",
+    labels: list[str] | None = None, label_col: str | None = None,
+) -> dict[str, Any]:
+    """A 'bet_interaction' PlotSpec dict (the data half; plotly_json is added later)."""
+    if color_by == "label":
+        title = f"{ip.x_name} × {ip.y_name} — coloured by {label_col}"
+    elif ip.significant:
+        title = f"{ip.x_name} × {ip.y_name} — {ip.form.title()} (z = {ip.bet_z:.1f})"
+    else:
+        title = f"{ip.x_name} × {ip.y_name} — strongest pair (n.s.)"
+    data: dict[str, Any] = {
+        "u": [round(c, 6) for c in ip.u],
+        "v": [round(c, 6) for c in ip.v],
+        "grid_size": ip.grid_size,
+        "region_z": ip.region_grid,
+        "color_by": color_by,
+        "bid": ip.bid, "form": ip.form, "bet_z": round(ip.bet_z, 4), "depth": ip.depth,
+    }
+    if color_by == "label":
+        data["labels"] = list(labels or [])
+    else:
+        data["point_sign"] = list(ip.point_sign)
+    return {
+        "plot_type": "bet_interaction",
+        "title": title,
+        "x_label": f"{ip.x_name} (copula rank)",
+        "y_label": f"{ip.y_name} (copula rank)",
+        "data": data,
+    }
+
+
+def _eda_text(n_screened: int, n_sig: int, n_nl: int, chosen: list[Any],
+              subtype_suggestive: bool) -> str:
+    """Plain-language EDA summary shown to the user at the Review step."""
+    if not n_sig:
+        return (f"BET screened {n_screened} variable pair(s); none showed significant "
+                "nonlinear dependence after multiple-testing correction. The most "
+                "dependent pair is shown for reference.")
+    top = chosen[0]
+    lead = (f"BET screened {n_screened} variable pair(s) and found {n_sig} with "
+            "significant dependence")
+    if n_nl:
+        lead += f", {n_nl} of them invisible to Pearson/Spearman correlation"
+    lead += "."
+    strongest = (f" The strongest is {top.x} × {top.y} "
+                 f"({top.form.lower()}, z = {top.bet_z:.1f}).")
+    how = (" Each point is coloured by which side of the dominant binary interaction it "
+           "falls on; clusters of one colour within the grid cells reveal latent "
+           "subgroups — the heterogeneity that creates the nonlinear pattern.")
+    tail = (" These mixture-type shapes often come from an unmodelled subgroup; a "
+            "within-subgroup analysis may be warranted." if subtype_suggestive else "")
+    return lead + strongest + how + tail
+
+
+def _eda_plots_and_summary(
+    df: pd.DataFrame, cols: dict[str, Any], aligned: pd.DataFrame,
+    numeric_columns: dict[str, list[float]], screen: Any, group: str | None,
+    max_plots: int = 3,
+) -> tuple[list[dict[str, Any]], dict[str, Any] | None]:
+    """Xiang-style binary-interaction EDA plots for the top nonlinear pairs.
+
+    Always emits a 2-colour (interaction-sign) plot per chosen pair; when the data has a
+    usable categorical column it also emits a label-coloured version of the top pair so
+    the user can compare the latent interaction structure against known subgroups.
+    """
+    from hta.bet_screen import SUBTYPE_SUGGESTIVE_FORMS, interaction_plot
+    from web.backend.plots import plotspec_to_plotly
+
+    if not screen.findings:
+        return [], None
+
+    sig = [f for f in screen.findings if f.significant]
+    chosen = sig[:max_plots] if sig else screen.findings[:1]
+
+    # A categorical column (preferring the chosen group) fully present on the screened
+    # rows with 2–8 categories → used to colour the top pair by known subgroup.
+    label_col: str | None = None
+    label_values: list[str] | None = None
+    candidates = ([group] if group else []) + [c for c in df.columns if c not in numeric_columns]
+    seen: set[str] = set()
+    for c in candidates:
+        if not c or c in seen or c not in cols:
+            continue
+        seen.add(c)
+        if cols[c].var_type not in ("BINARY", "CATEGORICAL"):
+            continue
+        s = df.loc[aligned.index, c]
+        if s.isna().any():
+            continue
+        labs = [str(v) for v in s.tolist()]
+        if 2 <= len(set(labs)) <= 8:
+            label_col, label_values = c, labs
+            break
+
+    eda_plots: list[dict[str, Any]] = []
+    for f in chosen:
+        ip = interaction_plot(numeric_columns[f.x], numeric_columns[f.y],
+                              x_name=f.x, y_name=f.y, seed=0)
+        spec = _interaction_plotspec(ip, color_by="interaction")
+        spec["plotly_json"] = plotspec_to_plotly(spec)
+        eda_plots.append(spec)
+
+    if label_col and label_values is not None:
+        top = chosen[0]
+        ip = interaction_plot(numeric_columns[top.x], numeric_columns[top.y],
+                              x_name=top.x, y_name=top.y, seed=0)
+        spec = _interaction_plotspec(ip, color_by="label",
+                                     labels=label_values, label_col=label_col)
+        spec["plotly_json"] = plotspec_to_plotly(spec)
+        eda_plots.append(spec)
+
+    subtype = any(f.form in SUBTYPE_SUGGESTIVE_FORMS for f in chosen)
+    summary: dict[str, Any] = {
+        "n_pairs_screened": len(screen.findings),
+        "n_pairs_total": screen.n_pairs,
+        "n_significant": screen.n_significant,
+        "n_nonlinear_only": screen.n_nonlinear_only,
+        "subtype_suggestive": subtype,
+        "label_colored_by": label_col,
+        "top_pairs": [
+            {"x": f.x, "y": f.y, "form": f.form, "bet_z": round(f.bet_z, 4),
+             "bid": f.bid, "nonlinear_only": f.nonlinear_only,
+             "significant": f.significant}
+            for f in chosen
+        ],
+        "text": _eda_text(len(screen.findings), screen.n_significant,
+                          screen.n_nonlinear_only, chosen, subtype),
+    }
+    return eda_plots, summary
 
 
 def _build_profile(df: pd.DataFrame, outcome: str | None, group: str | None) -> dict[str, Any]:
@@ -99,14 +243,19 @@ def _build_profile(df: pd.DataFrame, outcome: str | None, group: str | None) -> 
         variables.append(var)
 
     # BET pairwise nonlinear-dependence screen over the numeric columns (EDA stage).
-    numeric_names = [c for c in df.columns if cols[c].var_type in _NUMERIC_TYPES]
+    numeric_names = [c for c in df.columns
+                     if cols[c].var_type in _NUMERIC_TYPES and not _is_unnamed_index(c)]
     nonlinear: list[dict[str, Any]] = []
+    eda_plots: list[dict[str, Any]] = []
+    eda_summary: dict[str, Any] | None = None
     bet_note = None
     if len(numeric_names) >= 2:
         aligned = df[numeric_names].apply(pd.to_numeric, errors="coerce").dropna()
         if len(aligned) >= 8:
             numeric_columns = {c: [float(v) for v in aligned[c].tolist()] for c in numeric_names}
-            screen = pairwise_screen(numeric_columns, max_pairs=60, seed=0)
+            screen = pairwise_screen(numeric_columns, max_pairs=_MAX_SCREEN_PAIRS, seed=0)
+            eda_plots, eda_summary = _eda_plots_and_summary(
+                df, cols, aligned, numeric_columns, screen, group)
             for f in screen.findings:
                 nonlinear.append({
                     "x": f.x, "y": f.y, "n": f.n,
@@ -139,6 +288,8 @@ def _build_profile(df: pd.DataFrame, outcome: str | None, group: str | None) -> 
         "outcome_variable": outcome,
         "notes": notes,
         "nonlinear_dependencies": nonlinear,
+        "eda_plots": eda_plots,
+        "eda_summary": eda_summary,
     }
 
 

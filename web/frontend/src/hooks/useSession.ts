@@ -1,9 +1,9 @@
 import { useState, useCallback } from 'react'
 import type {
-  SessionStatus, VariableType, StudyDesign,
+  SessionStatus, VariableType, StudyDesign, DataProfile,
   Report, DialogueMessage, VariablesPayload,
 } from '../types/api'
-import { upload as apiUpload, setVariables as apiSetVariables, dialogueTurn, runAnalysis as apiRunAnalysis } from '../api/client'
+import { upload as apiUpload, setVariables as apiSetVariables, getSession, dialogueTurn, runAnalysis as apiRunAnalysis } from '../api/client'
 
 export interface SessionState {
   sessionId: string | null
@@ -15,6 +15,7 @@ export interface SessionState {
   preview: Record<string, unknown>[]
   // Step 2
   variables: VariablesPayload | null
+  profile: DataProfile | null      // BET EDA profile, fetched after the variables step
   // Step 3
   messages: DialogueMessage[]
   studyDesign: StudyDesign | null
@@ -29,7 +30,7 @@ export interface SessionState {
 const INITIAL: SessionState = {
   sessionId: null, status: null, step: 1,
   columns: [], inferredTypes: {}, preview: [],
-  variables: null,
+  variables: null, profile: null,
   messages: [], studyDesign: null, dialogueTurn: 0,
   progressMessage: '', progressStage: '', report: null, error: null,
 }
@@ -58,11 +59,17 @@ export function useSession() {
     }
   }, [update])
 
-  // Step 2 — set variables and hypothesis
+  // Step 2 — set variables and hypothesis, then fetch the BET EDA profile so it is
+  // ready to show (and act on) at the Review step "when receiving the data".
   const setVariables = useCallback(async (payload: VariablesPayload) => {
     if (!state.sessionId) return
     await apiSetVariables(state.sessionId, payload)
-    update({ variables: payload, step: 3 })
+    let profile: DataProfile | null = null
+    try {
+      const s = await getSession(state.sessionId)
+      profile = s.profile ?? null
+    } catch { /* non-fatal — the EDA panel simply won't render */ }
+    update({ variables: payload, profile, step: 3 })
   }, [state.sessionId, update])
 
   // Step 3 — one dialogue turn (streamed)

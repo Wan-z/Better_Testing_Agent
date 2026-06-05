@@ -55,12 +55,38 @@ export interface Variable {
   unique_values?: string[]
 }
 
+// One pair the BET EDA chose to display (mirrors eda_summary.top_pairs).
+export interface EdaTopPair {
+  x: string
+  y: string
+  form: string
+  bet_z: number
+  bid: string
+  nonlinear_only: boolean
+  significant: boolean
+}
+
+// Plain-language summary of the BET nonlinear-dependence screen (the EDA "result").
+export interface EdaSummary {
+  n_pairs_screened: number
+  n_pairs_total: number
+  n_significant: number
+  n_nonlinear_only: number
+  subtype_suggestive: boolean
+  label_colored_by?: string | null
+  top_pairs: EdaTopPair[]
+  text: string
+}
+
 export interface DataProfile {
   variables: Variable[]
   n_groups?: number
   group_variable?: string
   outcome_variable?: string
   notes: string[]
+  // Xiang-style binary-interaction EDA plots (plot_type "bet_interaction") + summary.
+  eda_plots?: PlotSpec[]
+  eda_summary?: EdaSummary | null
 }
 
 // ── Study design ──────────────────────────────────────────────────────────────

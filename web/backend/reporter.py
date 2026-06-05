@@ -177,6 +177,11 @@ def build_report(
     if qq:
         plots.append(qq)
 
+    # Carry the BET binary-interaction EDA plots (built at profiling time and shown at
+    # the Review step) into the report so the Results view and HTML export include them.
+    for ep in profile.get("eda_plots", []):
+        plots.append(ep)
+
     caveats = _build_caveats(profile, design, test_result, selection, outcome, group, predictor)
     return {
         "data_profile": profile,

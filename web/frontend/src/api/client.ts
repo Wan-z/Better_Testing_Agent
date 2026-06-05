@@ -1,6 +1,6 @@
 // Real API client — all calls go to /api (proxied to FastAPI in dev).
 
-import type { UploadResponse, VariablesPayload } from '../types/api'
+import type { SessionResponse, UploadResponse, VariablesPayload } from '../types/api'
 
 const BASE = '/api'
 
@@ -38,6 +38,12 @@ export async function setVariables(sessionId: string, payload: VariablesPayload)
     body: JSON.stringify(payload),
   })
   if (!res.ok) throw new Error(await res.text())
+}
+
+export async function getSession(sessionId: string): Promise<SessionResponse> {
+  const res = await fetch(`${BASE}/sessions/${sessionId}`)
+  if (!res.ok) throw new Error(await res.text())
+  return res.json()
 }
 
 export async function* dialogueTurn(

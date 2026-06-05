@@ -14,6 +14,7 @@ from hta.bet_screen import (
     LINEAR_NULL_THRESHOLD,
     cross_region,
     empirical_copula,
+    interaction_plot,
     maxbet,
     maxbet_twostage,
     pairwise_screen,
@@ -158,3 +159,50 @@ def test_twostage_quiet_under_independence() -> None:
     assert not res.significant
     assert res.form == "INDEPENDENT"
     assert res.positive_region == []
+
+
+# ── interaction_plot: data for the Xiang-style binary-interaction EDA scatter ──
+
+def test_interaction_plot_matches_maxbet_and_sums_to_s() -> None:
+    # The plot's dominant interaction and stats must equal maxbet's (same depth-2
+    # search, same seed), and the per-point interaction signs must sum to S.
+    rng = _rng(3)
+    x = [rng.uniform(-1, 1) for _ in range(500)]
+    y = [xi * xi + rng.gauss(0, 0.02) for xi in x]
+    ip = interaction_plot(x, y, x_name="x", y_name="y", seed=3)
+    mb = maxbet(x, y, seed=3)
+    assert ip.bid == mb.bid
+    assert ip.form == mb.form
+    assert ip.bet_statistic_s == mb.bet_statistic_s
+    assert math.isclose(ip.bet_z, mb.bet_z, rel_tol=1e-12)
+    assert ip.significant == mb.significant
+    assert len(ip.u) == len(ip.v) == len(ip.point_sign) == len(x)
+    assert all(s in (-1, 1) for s in ip.point_sign)
+    assert sum(ip.point_sign) == ip.bet_statistic_s
+    assert all(0.0 < c <= 1.0 for c in ip.u)
+    assert all(0.0 < c <= 1.0 for c in ip.v)
+
+
+def test_interaction_plot_region_grid_is_balanced() -> None:
+    rng = _rng(3)
+    x = [rng.uniform(-1, 1) for _ in range(300)]
+    y = [xi * xi + rng.gauss(0, 0.02) for xi in x]
+    ip = interaction_plot(x, y, seed=3)
+    assert ip.grid_size == 4 and ip.depth == 2
+    assert len(ip.region_grid) == 4 and all(len(row) == 4 for row in ip.region_grid)
+    flat = [c for row in ip.region_grid for c in row]
+    assert all(c in (-1, 1) for c in flat)
+    # A cross interaction splits the 4×4 grid into two equal halves (Zhang 2019 §3.3).
+    assert flat.count(1) == flat.count(-1) == 8
+
+
+def test_interaction_plot_independent_quiet() -> None:
+    rng = _rng(5)
+    x = [rng.gauss(0, 1) for _ in range(400)]
+    y = [rng.gauss(0, 1) for _ in range(400)]
+    ip = interaction_plot(x, y, seed=5)
+    assert not ip.significant
+    assert ip.form == "INDEPENDENT"
+    # Plot data stays well-formed even when nothing is detected.
+    assert len(ip.point_sign) == 400
+    assert sum(ip.point_sign) == ip.bet_statistic_s

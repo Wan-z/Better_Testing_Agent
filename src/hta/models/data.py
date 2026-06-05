@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from enum import Enum
-from typing import Optional
+from typing import Any, Optional
 
 from pydantic import BaseModel, Field
 
@@ -129,3 +129,8 @@ class DataProfile(BaseModel):
     notes: list[str] = Field(default_factory=list)
     # Ranked output of the BET pairwise nonlinear-dependence screen (EDA stage).
     nonlinear_dependencies: list[DependenceFinding] = Field(default_factory=list)
+    # Xiang-style binary-interaction EDA plots for the top nonlinear pairs, as enriched
+    # PlotSpec dicts (plot_type="bet_interaction", carrying plotly_json), plus a short
+    # plain-language summary of what the screen found (heterogeneity hints, next steps).
+    eda_plots: list[dict[str, Any]] = Field(default_factory=list)
+    eda_summary: Optional[dict[str, Any]] = None

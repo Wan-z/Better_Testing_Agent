@@ -132,6 +132,40 @@ class ScreenResult:
     notes: list[str] = field(default_factory=list)
 
 
+@dataclass
+class InteractionPlot:
+    """Everything needed to draw the Xiang-et-al. binary-interaction EDA scatter.
+
+    The plot lives in the empirical-copula unit square (marginal-free rank coordinates,
+    Xiang et al. 2023). Each observation is coloured by the sign of the *dominant binary
+    interaction* — the BID that Max BET selects as carrying the dependence — so the two
+    colours are literally the two halves of that binary interaction. Clusters of one
+    colour in particular grid cells are the visual signature of a mixture of latent
+    subgroups (the §8 / Xiang heterogeneity story), which is why this is offered as an
+    exploratory view "when receiving the data."
+    """
+
+    x_name: str
+    y_name: str
+    n: int
+    u: list[float]                    # empirical copula of x, in (0, 1]
+    v: list[float]                    # empirical copula of y, in (0, 1]
+    point_sign: list[int]             # ±1 per point: sign of the dominant interaction
+    region_grid: list[list[int]]      # region_grid[row][col] ∈ {-1, +1}; row 0 = bottom
+    grid_size: int                    # 2**depth (the copula grid is grid_size × grid_size)
+    depth: int
+    bid: str                          # dominant BID label, e.g. "A1A2B1"
+    form: str                         # DependenceForm of the dominant interaction
+    direction: str                    # "increasing" / "decreasing" / "none"
+    bet_statistic_s: int              # symmetry statistic S of the dominant BID (= Σ point_sign)
+    bet_z: float
+    p_value: float                    # two-sided, Bonferroni-adjusted across the 9 BIDs
+    pearson_r: float
+    spearman_rho: float
+    significant: bool
+    nonlinear_only: bool
+
+
 # ── statistics helpers (pure stdlib) ───────────────────────────────────────────
 
 def _norm_sf(z: float) -> float:
@@ -516,3 +550,81 @@ def pairwise_screen(
             f"Pearson/Spearman — consider whether latent subgroups drive the pattern."
         )
     return result
+
+
+def interaction_plot(
+    x: list[float],
+    y: list[float],
+    *,
+    x_name: str = "x",
+    y_name: str = "y",
+    alpha: float = DEFAULT_ALPHA,
+    seed: int = 0,
+) -> InteractionPlot:
+    """Build the depth-2 BET binary-interaction plot data for one pair (EDA).
+
+    Runs the same depth-2 Max BET search as :func:`maxbet`, but additionally returns the
+    per-point and per-cell signs of the *dominant* binary interaction so the caller can
+    render the Xiang-et-al. copula scatter: points coloured by which side of that
+    interaction they fall on, over the shaded 2×2-bit (4×4) interaction grid. The
+    colouring exposes latent subgroups — the heterogeneity that creates the nonlinearity.
+
+    The returned ``bid``/``form``/``bet_z``/``significant`` match :func:`maxbet` for the
+    same ``seed`` (same copula, same argmax), and ``sum(point_sign) == bet_statistic_s``.
+    """
+    if len(x) != len(y):
+        raise ValueError("x and y must have equal length")
+    n = len(x)
+    rng = random.Random(seed)
+    u = empirical_copula(x, rng)
+    v = empirical_copula(y, rng)
+
+    # Depth-2 Max BET — identical search to `maxbet`, but we keep the winning
+    # (X-interaction, Y-interaction) tokens so we can colour points by the interaction.
+    xs = dict(zip(_INTERACTIONS, _depth2_signs(u)))
+    ys = dict(zip(_INTERACTIONS, _depth2_signs(v)))
+    best_s = 0
+    best_bid = ("1", "1")
+    for a, b in _BIDS:
+        s = sum(ax * by for ax, by in zip(xs[a], ys[b]))
+        if abs(s) > abs(best_s):
+            best_s, best_bid = s, (a, b)
+
+    z = abs(best_s) / math.sqrt(n) if n > 0 else 0.0
+    p_bonf = min(1.0, 2.0 * _norm_sf(z) * len(_BIDS))
+    pearson = _pearson(x, y)
+    spearman = _spearman(x, y)
+    significant = p_bonf < alpha
+    nonlinear_only = (
+        significant
+        and abs(pearson) < LINEAR_NULL_THRESHOLD
+        and abs(spearman) < LINEAR_NULL_THRESHOLD
+    )
+    form = _BID_FORM[best_bid] if significant else "INDEPENDENT"
+    direction = "increasing" if best_s > 0 else "decreasing" if best_s < 0 else "none"
+
+    sa, sb = _token_to_subset(best_bid[0]), _token_to_subset(best_bid[1])
+    # Per-point sign of the dominant interaction (the two-colour key); this is exactly
+    # xs[a]·ys[b] for the winning BID, so its sum is the symmetry statistic S.
+    point_sign = [
+        _subset_sign(_bin_index(ui, 2), sa, 2) * _subset_sign(_bin_index(vi, 2), sb, 2)
+        for ui, vi in zip(u, v)
+    ]
+    # Per-cell sign on the 4×4 grid (row 0 = bottom, col 0 = left), via `cross_region`.
+    pos, neg = cross_region(sa, sb, 2)
+    grid_size = 4
+    region_grid = [[0] * grid_size for _ in range(grid_size)]
+    for r, c in pos:
+        region_grid[r][c] = 1
+    for r, c in neg:
+        region_grid[r][c] = -1
+
+    return InteractionPlot(
+        x_name=x_name, y_name=y_name, n=n,
+        u=u, v=v, point_sign=point_sign, region_grid=region_grid,
+        grid_size=grid_size, depth=2, bid=_bid_label(best_bid),
+        form=form, direction=direction if significant else "none",
+        bet_statistic_s=best_s, bet_z=z, p_value=p_bonf,
+        pearson_r=pearson, spearman_rho=spearman,
+        significant=significant, nonlinear_only=nonlinear_only,
+    )

@@ -110,5 +110,66 @@ def plotspec_to_plotly(spec: dict[str, Any]) -> dict[str, Any]:
             "layout": layout,
         }
 
+    if plot_type == "bet_interaction":
+        # Xiang-style binary-interaction EDA scatter on the empirical-copula unit square.
+        # A faint checkerboard heatmap shows the dominant interaction's ± regions on the
+        # 2^d grid; points are coloured by which region (sign) they fall in — or by a
+        # known subgroup label when one is supplied — so heterogeneity becomes visible.
+        u = data_raw.get("u", [])
+        v = data_raw.get("v", [])
+        g = int(data_raw.get("grid_size", 4)) or 4
+        region_z = data_raw.get("region_z", [])
+        color_by = data_raw.get("color_by", "interaction")
+        centers = [(k + 0.5) / g for k in range(g)]
+
+        traces = []
+        if region_z:
+            traces.append({
+                "type": "heatmap",
+                "x": centers, "y": centers, "z": region_z,
+                "colorscale": [[0.0, "#bfdbfe"], [1.0, "#fde68a"]],  # − blue / + amber
+                "zmin": -1, "zmax": 1, "xgap": 1, "ygap": 1,
+                "showscale": False, "opacity": 0.45, "hoverinfo": "skip",
+            })
+
+        if color_by == "label":
+            labels = [str(lab) for lab in data_raw.get("labels", [])]
+            cats: list[str] = []
+            for lab in labels:
+                if lab not in cats:
+                    cats.append(lab)
+            for i, cat in enumerate(cats):
+                xs_pts = [uu for uu, lab in zip(u, labels) if lab == cat]
+                ys_pts = [vv for vv, lab in zip(v, labels) if lab == cat]
+                traces.append({
+                    "type": "scatter", "mode": "markers", "name": cat,
+                    "x": xs_pts, "y": ys_pts,
+                    "marker": {"color": PLOTLY_PALETTE[i % len(PLOTLY_PALETTE)],
+                               "size": 7, "opacity": 0.85,
+                               "line": {"width": 0.5, "color": "#ffffff"}},
+                })
+        else:
+            point_sign = data_raw.get("point_sign", [])
+            for name, sgn, color in (("Interaction +", 1, "#b45309"),
+                                     ("Interaction −", -1, "#1d4ed8")):
+                xs_pts = [uu for uu, s in zip(u, point_sign) if s == sgn]
+                ys_pts = [vv for vv, s in zip(v, point_sign) if s == sgn]
+                traces.append({
+                    "type": "scatter", "mode": "markers", "name": name,
+                    "x": xs_pts, "y": ys_pts,
+                    "marker": {"color": color, "size": 7, "opacity": 0.85,
+                               "line": {"width": 0.5, "color": "#ffffff"}},
+                })
+
+        axis = {"range": [0, 1], "tick0": 0, "dtick": 1.0 / g, "showgrid": True,
+                "gridcolor": "#cbd5e1", "zeroline": False, "constrain": "domain"}
+        bet_layout = {
+            **layout,
+            "xaxis": {**layout.get("xaxis", {}), **axis},
+            "yaxis": {**layout.get("yaxis", {}), **axis, "scaleanchor": "x"},
+            "legend": {"orientation": "h", "y": -0.2, "x": 0},
+        }
+        return {"data": traces, "layout": bet_layout}
+
     # Fallback — return empty chart
     return {"data": [], "layout": layout}

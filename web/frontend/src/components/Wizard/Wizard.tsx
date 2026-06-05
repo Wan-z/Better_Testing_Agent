@@ -66,10 +66,11 @@ export default function Wizard() {
         )}
         {state.step === 4 && state.variables && state.studyDesign && (
           <StepReview
-            profile={state.report?.data_profile ?? null}
+            profile={state.profile}
             variables={state.variables}
             studyDesign={state.studyDesign}
             onRun={session.runAnalysis}
+            onBack={() => session.update({ step: 2 })}
           />
         )}
         {state.step === 5 && (
