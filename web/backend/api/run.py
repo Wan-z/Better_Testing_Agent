@@ -1,19 +1,50 @@
-"""Analysis run endpoint — SSE streaming pipeline execution."""
+"""Analysis run endpoint — SSE streaming pipeline execution.
+
+Dry-run mode streams the canned ``STUB_REPORT``; live mode runs the real pipeline:
+profile (already written by set_variables) → select test (playground.pipeline) →
+execute (executor.py) → report (reporter.py).
+"""
 
 from __future__ import annotations
 
 import asyncio
+import io
 import json
+import sys
+from pathlib import Path
+from typing import Any, Optional
 
+import pandas as pd
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import StreamingResponse
 
+from web.backend.config import DRY_RUN
+from web.backend.executor import execute
 from web.backend.plots import plotspec_to_plotly
+from web.backend.reporter import build_report
 from web.backend.storage.local import LocalStorage
 from web.backend.stubs import STUB_REPORT
 
+# Make the statistical engine (`hta`, under src/) and `playground` importable for the
+# function-level imports used inside the live pipeline below.
+_ROOT = Path(__file__).resolve().parents[3]
+for _p in (str(_ROOT / "src"), str(_ROOT)):
+    if _p not in sys.path:
+        sys.path.insert(0, _p)
+
 router = APIRouter()
 store = LocalStorage()
+
+_NUMERIC_TYPES = ("CONTINUOUS", "ORDINAL", "COUNT")
+
+DEFAULT_DESIGN: dict[str, Any] = {
+    "design_type": "OBSERVATIONAL",
+    "measurement_type": "BETWEEN_SUBJECTS",
+    "is_randomized": False,
+    "confounders": [],
+    "notes": ["No design dialogue completed; assuming an observational, "
+              "between-subjects design."],
+}
 
 
 def _sse(data: object) -> str:
@@ -54,15 +85,99 @@ async def _run_dry_run(session_id: str) -> object:
     yield _sse({"type": "result", "report": report})
 
 
+def _choose_predictor(df: pd.DataFrame, cols: dict, outcome: str,  # type: ignore[type-arg]
+                      group: Optional[str]) -> Optional[str]:
+    """For a no-group correlation analysis, pick the numeric column most BET-dependent
+    with the outcome (so the association uses the most interesting partner)."""
+    if group:
+        return None
+    if outcome not in cols or cols[outcome].var_type not in _NUMERIC_TYPES:
+        return None
+    candidates = [c for c in df.columns
+                  if c != outcome and cols[c].var_type in _NUMERIC_TYPES]
+    if not candidates:
+        return None
+    from hta.bet_screen import maxbet
+    y = pd.to_numeric(df[outcome], errors="coerce")
+    best: Optional[tuple[str, float]] = None
+    for c in candidates:
+        sub = pd.DataFrame({"x": pd.to_numeric(df[c], errors="coerce"), "y": y}).dropna()
+        if len(sub) < 8:
+            continue
+        try:
+            z = maxbet(sub["x"].tolist(), sub["y"].tolist(), seed=0).bet_z
+        except Exception:
+            z = -1.0
+        if best is None or z > best[1]:
+            best = (c, z)
+    return best[0] if best else candidates[0]
+
+
+async def _run_live(session_id: str) -> object:
+    """Run the real pipeline and stream progress + the final report."""
+    from playground.pipeline import profile_column, select
+
+    variables = json.loads(store.read(session_id, "variables.json"))
+    outcome = variables.get("outcome_variable")
+    group = variables.get("group_variable") or None
+    hypothesis = variables.get("hypothesis", "")
+
+    df = pd.read_csv(io.BytesIO(store.read(session_id, "data.csv")))
+
+    profile = (json.loads(store.read(session_id, "profile.json"))
+               if store.exists(session_id, "profile.json") else None)
+    if profile is None:
+        from web.backend.api.sessions import _build_profile
+        profile = _build_profile(df, outcome, group)
+        store.write_json(session_id, "profile.json", profile)
+
+    design = (json.loads(store.read(session_id, "design.json"))
+              if store.exists(session_id, "design.json") else dict(DEFAULT_DESIGN))
+
+    cols = {c: profile_column(c, df[c].astype(str).tolist()) for c in df.columns}
+    raw = {c: df[c].astype(str).tolist() for c in df.columns}
+    predictor = _choose_predictor(df, cols, outcome, group)
+
+    # ── Step B: select test ───────────────────────────────────────────────────
+    yield _sse({"type": "progress", "stage": "selecting_test",
+                "message": "Selecting statistical test…"})
+    await asyncio.sleep(0)
+    selection = select(cols, outcome, group, predictor, hypothesis, raw)
+    test_name = selection.test
+    if test_name in ("—", "", None):
+        # Defensive fallback: pick a sensible test from what we have.
+        test_name = "PEARSON_CORRELATION" if predictor else "—"
+        selection.test = test_name
+
+    # ── Step C: execute ───────────────────────────────────────────────────────
+    yield _sse({"type": "progress", "stage": "executing_test",
+                "message": f"Running {test_name.replace('_', ' ').title()}…"})
+    await asyncio.sleep(0)
+    test_result = execute(test_name, df, outcome, group, predictor, design, selection)
+
+    # ── Step D: report ────────────────────────────────────────────────────────
+    yield _sse({"type": "progress", "stage": "generating_report",
+                "message": "Generating report…"})
+    await asyncio.sleep(0)
+    report = build_report(profile, design, test_result, selection, df,
+                          outcome, group, predictor, hypothesis)
+    _enrich_plots(report)
+
+    store.write_json(session_id, "report.json", report)
+    store.set_status(session_id, "COMPLETE")
+    yield _sse({"type": "result", "report": report})
+
+
 @router.post("/sessions/{session_id}/run")
 async def run_analysis(session_id: str) -> StreamingResponse:
     if not store.exists(session_id, "metadata.json"):
         raise HTTPException(status_code=404, detail="Session not found.")
 
     store.set_status(session_id, "RUNNING")
+    generator = _run_dry_run(session_id) if DRY_RUN else _run_live(session_id)
 
     return StreamingResponse(
-        _run_dry_run(session_id),
+        generator,
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )

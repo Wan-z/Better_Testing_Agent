@@ -1,0 +1,619 @@
+"""Statistical test execution for the web backend.
+
+`execute(test_name, df, outcome, group, predictor, design, selection) -> dict`
+returns a plain dict matching `src/hta/models/test.py::TestResult`. Pure scipy +
+statsmodels; bootstrap CIs use stdlib `random` (seed 42, n=1000) — no numpy needed.
+
+This is the real replacement for the dry-run stub; it is called synchronously from
+the async SSE generator in `api/run.py` (the tests are CPU-bound and fast).
+"""
+
+from __future__ import annotations
+
+import math
+import random
+import sys
+from pathlib import Path
+from typing import Any, Callable, Optional
+
+import pandas as pd
+from scipy import stats
+
+# Make `hta` (under src/) importable for the BET test.
+_ROOT = Path(__file__).resolve().parents[2]
+if str(_ROOT / "src") not in sys.path:
+    sys.path.insert(0, str(_ROOT / "src"))
+
+N_BOOTSTRAP = 1000
+BOOTSTRAP_SEED = 42
+
+# Cohen (1988) interpretation thresholds, keyed by effect-size family.
+_THRESH = {
+    "d": (0.2, 0.5, 0.8),          # Cohen's d / d_z
+    "r": (0.1, 0.3, 0.5),          # correlation / rank-biserial
+    "v": (0.1, 0.3, 0.5),          # Cramér's V
+    "eta2": (0.01, 0.06, 0.14),    # eta-squared
+}
+
+
+# ── small numeric helpers (stdlib) ────────────────────────────────────────────
+
+def _mean(v: list[float]) -> float:
+    return sum(v) / len(v) if v else 0.0
+
+
+def _var(v: list[float]) -> float:
+    n = len(v)
+    if n < 2:
+        return 0.0
+    m = _mean(v)
+    return sum((x - m) ** 2 for x in v) / (n - 1)
+
+
+def _sd(v: list[float]) -> float:
+    return math.sqrt(_var(v))
+
+
+def _interpret(value: float, family: str) -> str:
+    small, medium, large = _THRESH[family]
+    a = abs(value)
+    if a >= large:
+        return "large"
+    if a >= medium:
+        return "medium"
+    if a >= small:
+        return "small"
+    return "negligible"
+
+
+def _finite(x: float, default: float = 0.0) -> float:
+    return float(x) if x is not None and math.isfinite(float(x)) else default
+
+
+def _pct(sorted_vals: list[float], p: float) -> float:
+    if not sorted_vals:
+        return float("nan")
+    k = (len(sorted_vals) - 1) * p
+    f = math.floor(k)
+    c = min(f + 1, len(sorted_vals) - 1)
+    if f == c:
+        return sorted_vals[f]
+    return sorted_vals[f] + (sorted_vals[c] - sorted_vals[f]) * (k - f)
+
+
+def _boot_two_group(a: list[float], b: list[float],
+                    stat: Callable[[list[float], list[float]], float]) -> tuple[float, float]:
+    rng = random.Random(BOOTSTRAP_SEED)
+    out: list[float] = []
+    for _ in range(N_BOOTSTRAP):
+        ra = rng.choices(a, k=len(a))
+        rb = rng.choices(b, k=len(b))
+        try:
+            v = stat(ra, rb)
+            if v is not None and math.isfinite(v):
+                out.append(v)
+        except Exception:
+            pass
+    out.sort()
+    return (_pct(out, 0.025), _pct(out, 0.975)) if out else (float("nan"), float("nan"))
+
+
+def _boot_paired(x: list[float], y: list[float],
+                 stat: Callable[[list[float], list[float]], float]) -> tuple[float, float]:
+    rng = random.Random(BOOTSTRAP_SEED)
+    m = len(x)
+    out: list[float] = []
+    for _ in range(N_BOOTSTRAP):
+        idx = [rng.randrange(m) for _ in range(m)]
+        rx = [x[i] for i in idx]
+        ry = [y[i] for i in idx]
+        try:
+            v = stat(rx, ry)
+            if v is not None and math.isfinite(v):
+                out.append(v)
+        except Exception:
+            pass
+    out.sort()
+    return (_pct(out, 0.025), _pct(out, 0.975)) if out else (float("nan"), float("nan"))
+
+
+def _cohens_d(a: list[float], b: list[float]) -> float:
+    na, nb = len(a), len(b)
+    if na < 2 or nb < 2:
+        return 0.0
+    sp2 = ((na - 1) * _var(a) + (nb - 1) * _var(b)) / (na + nb - 2)
+    sp = math.sqrt(sp2)
+    return (_mean(a) - _mean(b)) / sp if sp > 0 else 0.0
+
+
+def _dz_stat(x: list[float], y: list[float]) -> float:
+    dd = [p - q for p, q in zip(x, y)]
+    s = _sd(dd)
+    return _mean(dd) / s if s > 0 else 0.0
+
+
+def _eta_squared(groups: list[list[float]]) -> float:
+    allv = [x for g in groups for x in g]
+    if len(allv) < 2:
+        return 0.0
+    gm = _mean(allv)
+    ss_b = sum(len(g) * (_mean(g) - gm) ** 2 for g in groups)
+    ss_t = sum((x - gm) ** 2 for x in allv)
+    return ss_b / ss_t if ss_t > 0 else 0.0
+
+
+# ── data extraction ───────────────────────────────────────────────────────────
+
+def _numeric(df: pd.DataFrame, col: str) -> list[float]:
+    return [float(v) for v in pd.to_numeric(df[col], errors="coerce").dropna().tolist()]
+
+
+def _group_arrays(
+    df: pd.DataFrame, outcome: str, group: str,
+) -> tuple[list[str], list[list[float]]]:
+    sub = df[[outcome, group]].copy()
+    sub[outcome] = pd.to_numeric(sub[outcome], errors="coerce")
+    sub = sub.dropna()
+    labels: list[str] = []
+    arrays: list[list[float]] = []
+    for label, g in sub.groupby(group, sort=True):
+        vals = [float(v) for v in g[outcome].tolist()]
+        if vals:
+            labels.append(str(label))
+            arrays.append(vals)
+    return labels, arrays
+
+
+def _xy(df: pd.DataFrame, outcome: str, predictor: str) -> tuple[list[float], list[float]]:
+    sub = df[[predictor, outcome]].copy()
+    sub[predictor] = pd.to_numeric(sub[predictor], errors="coerce")
+    sub[outcome] = pd.to_numeric(sub[outcome], errors="coerce")
+    sub = sub.dropna()
+    return ([float(v) for v in sub[predictor].tolist()],
+            [float(v) for v in sub[outcome].tolist()])
+
+
+# ── assembly helpers ──────────────────────────────────────────────────────────
+
+def _check(name: str, status: str, note: str, *,
+           test_used: Optional[str] = None, statistic: Optional[float] = None,
+           p_value: Optional[float] = None) -> dict[str, Any]:
+    d: dict[str, Any] = {"assumption_name": name, "status": status, "note": note}
+    if test_used is not None:
+        d["test_used"] = test_used
+    if statistic is not None:
+        d["statistic"] = round(float(statistic), 4)
+    if p_value is not None:
+        d["p_value"] = round(float(p_value), 4)
+    return d
+
+
+def _result(test_name: str, statistic: float, p_value: float, dof: Optional[float],
+            measure: str, value: float, family: str, ci_lo: float, ci_hi: float,
+            checks: list[dict[str, Any]], primary_ci: tuple[float, float],
+            notes: list[str], power: Optional[float] = None) -> dict[str, Any]:
+    value = _finite(value)
+    ci_lo = _finite(ci_lo, value)
+    ci_hi = _finite(ci_hi, value)
+    return {
+        "test_used": test_name,
+        "statistic": round(_finite(statistic), 4),
+        "p_value": _finite(p_value, 1.0),
+        "degrees_of_freedom": (round(float(dof), 2) if dof is not None else None),
+        "effect_size": {
+            "measure_name": measure,
+            "value": round(value, 4),
+            "interpretation": _interpret(value, family),
+            "ci_lower": round(ci_lo, 4),
+            "ci_upper": round(ci_hi, 4),
+        },
+        "assumption_checks": checks,
+        "confidence_interval": [round(_finite(primary_ci[0], value), 4),
+                                round(_finite(primary_ci[1], value), 4)],
+        "is_significant": bool(_finite(p_value, 1.0) < 0.05),
+        "power": power,
+        "notes": notes,
+    }
+
+
+def _not_implemented(test_name: str) -> dict[str, Any]:
+    return _result(
+        test_name, 0.0, 1.0, None, "—", 0.0, "r", 0.0, 0.0,
+        [_check("Execution", "UNTESTABLE", f"{test_name} is not yet implemented.")],
+        (0.0, 0.0),
+        [f"{test_name} not yet implemented — use the dry-run stub for a demonstration."],
+    )
+
+
+def _normality_check(groups: list[list[float]]) -> dict[str, Any]:
+    """Shapiro-Wilk per group; MET if all groups look normal, else VIOLATED."""
+    worst_p = 1.0
+    testable = False
+    for g in groups:
+        if 3 <= len(g) <= 5000:
+            testable = True
+            try:
+                _, p = stats.shapiro(g)
+                worst_p = min(worst_p, float(p))
+            except Exception:
+                pass
+    if not testable:
+        return _check("Normality", "UNTESTABLE", "Too few observations to test normality.")
+    status = "MET" if worst_p > 0.05 else "VIOLATED"
+    note = ("Each group is approximately normal (Shapiro-Wilk min p > 0.05)."
+            if status == "MET" else
+            "At least one group departs from normality (Shapiro-Wilk min p ≤ 0.05); "
+            "the Welch/parametric result is reasonably robust at adequate N, but a "
+            "rank-based test may be preferable.")
+    return _check("Normality", status, note, test_used="Shapiro-Wilk", p_value=worst_p)
+
+
+def _min_n_check(groups: list[list[float]], floor: int = 5) -> dict[str, Any]:
+    smallest = min((len(g) for g in groups), default=0)
+    status = "MET" if smallest >= floor else "VIOLATED"
+    return _check("Minimum sample size", status,
+                  f"Smallest group n = {smallest} (need ≥ {floor}).")
+
+
+# ── per-test executors ────────────────────────────────────────────────────────
+
+def _two_sample_t(df: pd.DataFrame, outcome: str, group: str, equal_var: bool) -> dict[str, Any]:
+    labels, groups = _group_arrays(df, outcome, group)
+    if len(groups) < 2:
+        return _not_implemented("WELCH_T")
+    a, b = groups[0], groups[1]
+    res = stats.ttest_ind(a, b, equal_var=equal_var)
+    d = _cohens_d(a, b)
+    ci_d = _boot_two_group(a, b, _cohens_d)
+    ci_md = _boot_two_group(a, b, lambda x, y: _mean(x) - _mean(y))
+    name = "INDEPENDENT_T" if equal_var else "WELCH_T"
+    checks = [
+        _normality_check(groups),
+        _min_n_check(groups),
+        _check("Independence of observations", "UNTESTABLE",
+               "Between-subjects design assumed; independence cannot be verified from data."),
+    ]
+    if equal_var:
+        try:
+            lev_stat, lev_p = stats.levene(a, b)
+            checks.append(_check("Equal variances", "MET" if lev_p > 0.05 else "VIOLATED",
+                                 "Levene's test for homogeneity of variance.",
+                                 test_used="Levene", statistic=lev_stat, p_value=lev_p))
+        except Exception:
+            pass
+    return _result(name, res.statistic, res.pvalue, getattr(res, "df", None),
+                   "Cohen's d", d, "d", ci_d[0], ci_d[1], checks, ci_md,
+                   [f"Mean difference = {_mean(a) - _mean(b):.3f} ({labels[0]} − {labels[1]})."])
+
+
+def _mann_whitney(df: pd.DataFrame, outcome: str, group: str) -> dict[str, Any]:
+    labels, groups = _group_arrays(df, outcome, group)
+    if len(groups) < 2:
+        return _not_implemented("MANN_WHITNEY_U")
+    a, b = groups[0], groups[1]
+
+    def rb(x: list[float], y: list[float]) -> float:
+        u = stats.mannwhitneyu(x, y, alternative="two-sided").statistic
+        return 1.0 - 2.0 * u / (len(x) * len(y))
+
+    res = stats.mannwhitneyu(a, b, alternative="two-sided")
+    r = rb(a, b)
+    ci = _boot_two_group(a, b, rb)
+    checks = [_min_n_check(groups),
+              _check("Independence of observations", "UNTESTABLE",
+                     "Between-subjects design assumed.")]
+    return _result("MANN_WHITNEY_U", res.statistic, res.pvalue, None,
+                   "rank-biserial r", r, "r", ci[0], ci[1], checks, ci,
+                   ["Distribution-free comparison of two independent groups."])
+
+
+def _paired_t(df: pd.DataFrame, outcome: str, group: str) -> dict[str, Any]:
+    labels, groups = _group_arrays(df, outcome, group)
+    if len(groups) < 2:
+        return _not_implemented("PAIRED_T")
+    m = min(len(groups[0]), len(groups[1]))
+    a, b = groups[0][:m], groups[1][:m]
+    res = stats.ttest_rel(a, b)
+    diffs = [x - y for x, y in zip(a, b)]
+    dz = _dz_stat(a, b)
+    ci_dz = _boot_paired(a, b, _dz_stat)
+    ci_md = _boot_paired(a, b, lambda x, y: _mean([p - q for p, q in zip(x, y)]))
+    checks = [_normality_check([diffs]), _min_n_check(groups, 5),
+              _check("Paired structure", "UNTESTABLE",
+                     f"Pairs aligned by row order; {m} pairs used.")]
+    return _result("PAIRED_T", res.statistic, res.pvalue, float(m - 1),
+                   "Cohen's d_z", dz, "d", ci_dz[0], ci_dz[1], checks, ci_md,
+                   ["Within-subjects comparison of paired observations."])
+
+
+def _wilcoxon(df: pd.DataFrame, outcome: str, group: str) -> dict[str, Any]:
+    labels, groups = _group_arrays(df, outcome, group)
+    if len(groups) < 2:
+        return _not_implemented("WILCOXON_SIGNED_RANK")
+    m = min(len(groups[0]), len(groups[1]))
+    a, b = groups[0][:m], groups[1][:m]
+    try:
+        res = stats.wilcoxon(a, b)
+    except ValueError:
+        return _not_implemented("WILCOXON_SIGNED_RANK")
+    n = m
+    r = 1.0 - 2.0 * float(res.statistic) / (n * (n + 1) / 2.0) if n else 0.0
+    checks = [_min_n_check(groups, 5),
+              _check("Paired structure", "UNTESTABLE", f"{m} pairs (row-aligned).")]
+    return _result("WILCOXON_SIGNED_RANK", res.statistic, res.pvalue, None,
+                   "rank-biserial r", r, "r", -abs(r), abs(r), checks, (-abs(r), abs(r)),
+                   ["Distribution-free within-subjects comparison."])
+
+
+def _anova(df: pd.DataFrame, outcome: str, group: str, welch: bool) -> dict[str, Any]:
+    labels, groups = _group_arrays(df, outcome, group)
+    if len(groups) < 2:
+        return _not_implemented("WELCH_ANOVA" if welch else "ONE_WAY_ANOVA")
+    if welch:
+        res = stats.alexandergovern(*groups)
+        statistic, p, dof = res.statistic, res.pvalue, None
+        name = "WELCH_ANOVA"
+    else:
+        res = stats.f_oneway(*groups)
+        statistic, p, dof = res.statistic, res.pvalue, float(len(groups) - 1)
+        name = "ONE_WAY_ANOVA"
+    eta2 = _eta_squared(groups)
+    ci = _bootstrap_eta(groups)
+    checks = [
+        _normality_check(groups),
+        _min_n_check(groups),
+        _check("Independence of observations", "UNTESTABLE", "Assumed by design."),
+    ]
+    notes = [f"{len(groups)} groups compared; a Holm-adjusted post-hoc "
+             "(Games–Howell/Tukey) is recommended to localize differences."]
+    return _result(name, statistic, p, dof, "eta-squared", eta2, "eta2",
+                   ci[0], ci[1], checks, ci, notes)
+
+
+def _bootstrap_eta(groups: list[list[float]]) -> tuple[float, float]:
+    rng = random.Random(BOOTSTRAP_SEED)
+    out: list[float] = []
+    for _ in range(N_BOOTSTRAP):
+        rs = [rng.choices(g, k=len(g)) for g in groups]
+        try:
+            v = _eta_squared(rs)
+            if math.isfinite(v):
+                out.append(v)
+        except Exception:
+            pass
+    out.sort()
+    return (_pct(out, 0.025), _pct(out, 0.975)) if out else (0.0, 0.0)
+
+
+def _kruskal(df: pd.DataFrame, outcome: str, group: str) -> dict[str, Any]:
+    labels, groups = _group_arrays(df, outcome, group)
+    if len(groups) < 2:
+        return _not_implemented("KRUSKAL_WALLIS")
+    res = stats.kruskal(*groups)
+    k = len(groups)
+    n = sum(len(g) for g in groups)
+    eta2 = (float(res.statistic) - k + 1) / (n - k) if n > k else 0.0
+    eta2 = max(0.0, eta2)
+    checks = [
+        _min_n_check(groups),
+        _check("Independence of observations", "UNTESTABLE", "Assumed by design."),
+    ]
+    return _result("KRUSKAL_WALLIS", res.statistic, res.pvalue, float(k - 1),
+                   "eta-squared (rank)", eta2, "eta2", eta2, eta2, checks, (eta2, eta2),
+                   ["Distribution-free omnibus test; Dunn's post-hoc (Holm) recommended."])
+
+
+def _chi_squared(df: pd.DataFrame, outcome: str, group: str) -> dict[str, Any]:
+    table = pd.crosstab(df[outcome], df[group])
+    if table.shape[0] < 2 or table.shape[1] < 2:
+        return _not_implemented("CHI_SQUARED")
+    chi2, p, dof, expected = stats.chi2_contingency(table)
+    n = int(table.values.sum())
+    r, c = table.shape
+    v = math.sqrt(chi2 / (n * min(r - 1, c - 1))) if n and min(r - 1, c - 1) else 0.0
+    min_exp = float(expected.min())
+    checks = [
+        _check("Expected cell counts ≥ 5", "MET" if min_exp >= 5 else "VIOLATED",
+               f"Smallest expected count = {min_exp:.2f}. "
+               + ("" if min_exp >= 5 else "Fisher's exact is preferable.")),
+        _check("Independence of observations", "UNTESTABLE", "Assumed by design."),
+    ]
+    return _result("CHI_SQUARED", chi2, p, float(dof), "Cramér's V", v, "v",
+                   v, v, checks, (v, v),
+                   [f"{r}×{c} contingency table, N = {n}."])
+
+
+def _fisher(df: pd.DataFrame, outcome: str, group: str) -> dict[str, Any]:
+    table = pd.crosstab(df[outcome], df[group])
+    if table.shape != (2, 2):
+        return _not_implemented("FISHER_EXACT")
+    odds, p = stats.fisher_exact(table.values)
+    checks = [
+        _check("2×2 table", "MET", "Outcome and group are both binary."),
+        _check("Small expected counts", "UNTESTABLE",
+               "Fisher's exact is valid for any expected counts."),
+    ]
+    return _result("FISHER_EXACT", odds, p, None, "odds ratio", odds, "r",
+                   odds, odds, checks, (odds, odds),
+                   ["Exact test for a 2×2 contingency table."])
+
+
+def _mcnemar(df: pd.DataFrame, outcome: str, group: str) -> dict[str, Any]:
+    from statsmodels.stats.contingency_tables import mcnemar
+    table = pd.crosstab(df[outcome], df[group])
+    if table.shape != (2, 2):
+        return _not_implemented("MCNEMAR")
+    arr = table.values
+    res = mcnemar(arr)
+    b_, c_ = float(arr[0, 1]), float(arr[1, 0])
+    odds = (b_ / c_) if c_ > 0 else float("nan")
+    checks = [_check("Paired binary structure", "UNTESTABLE", "Assumed by design."),
+              _check("Discordant pairs ≥ 25",
+                     "MET" if (b_ + c_) >= 25 else "MARGINAL",
+                     f"{int(b_ + c_)} discordant pairs.")]
+    return _result("MCNEMAR", res.statistic, res.pvalue, None, "odds ratio (discordant)",
+                   _finite(odds, 1.0), "r", _finite(odds, 1.0), _finite(odds, 1.0),
+                   checks, (_finite(odds, 1.0), _finite(odds, 1.0)),
+                   ["McNemar's test for paired binary data."])
+
+
+def _pearson(df: pd.DataFrame, outcome: str, predictor: str, selection: Any) -> dict[str, Any]:
+    x, y = _xy(df, outcome, predictor)
+    if len(x) < 3:
+        return _not_implemented("PEARSON_CORRELATION")
+    res = stats.pearsonr(x, y)
+    try:
+        ci = res.confidence_interval(0.95)
+        ci_lo, ci_hi = float(ci.low), float(ci.high)
+    except Exception:
+        ci_lo, ci_hi = float("nan"), float("nan")
+    checks = _corr_checks(x, y, selection, linear=True)
+    return _result("PEARSON_CORRELATION", res.statistic, res.pvalue, float(len(x) - 2),
+                   "Pearson's r", res.statistic, "r", ci_lo, ci_hi, checks, (ci_lo, ci_hi),
+                   [f"Linear association between {predictor} and {outcome} (n = {len(x)})."])
+
+
+def _spearman(df: pd.DataFrame, outcome: str, predictor: str, selection: Any) -> dict[str, Any]:
+    x, y = _xy(df, outcome, predictor)
+    if len(x) < 3:
+        return _not_implemented("SPEARMAN_CORRELATION")
+    res = stats.spearmanr(x, y)
+    ci = _boot_paired(x, y, lambda a, b: float(stats.spearmanr(a, b).statistic))
+    checks = _corr_checks(x, y, selection, linear=False)
+    return _result("SPEARMAN_CORRELATION", res.statistic, res.pvalue, None,
+                   "Spearman's ρ", res.statistic, "r", ci[0], ci[1], checks, ci,
+                   [f"Monotone (rank) association: {predictor} vs {outcome} (n = {len(x)})."])
+
+
+def _maxbet(df: pd.DataFrame, outcome: str, predictor: str) -> dict[str, Any]:
+    from hta.bet_screen import maxbet
+    x, y = _xy(df, outcome, predictor)
+    if len(x) < 8:
+        return _not_implemented("MAXBET")
+    res = maxbet(x, y, seed=0)
+    n = len(x)
+    effect = res.bet_z / math.sqrt(n) if n else 0.0
+    ci = _boot_paired(x, y, lambda a, b: maxbet(a, b, seed=0).bet_z / math.sqrt(len(a)))
+    checks = [
+        _check("Minimum sample size", "MET" if n >= 8 else "VIOLATED", f"n = {n} (need ≥ 8)."),
+        _check("Continuity", "MET", "Ties are jittered before the copula transform."),
+    ]
+    notes = [f"Dominant interaction {res.bid} → {res.form} dependence.",
+             "BET detects nonlinear dependence that Pearson/Spearman can miss."]
+    if res.region_description:
+        notes.append(res.region_description)
+    return _result("MAXBET", res.bet_z, res.p_value, None, "BET symmetry (|S|/n)",
+                   effect, "r", ci[0], ci[1], checks, ci, notes)
+
+
+def _corr_checks(
+    x: list[float], y: list[float], selection: Any, linear: bool,
+) -> list[dict[str, Any]]:
+    bet = (selection.computed or {}).get("BET", "") if selection is not None else ""
+    if linear:
+        nonlinear = "form=PARABOLIC" in bet or "form=SINUSOIDAL" in bet or \
+                    "form=CHECKERBOARD" in bet or "form=COMPLEX" in bet
+        lin = _check("Linearity", "VIOLATED" if nonlinear else "MET",
+                     "BET screen: " + (bet or "no nonlinear pattern detected."))
+    else:
+        lin = _check("Monotonicity", "MET",
+                     "A monotone (rank) relationship is the estimand; linearity not required.")
+    return [lin, _check("Sample size", "MET" if len(x) >= 10 else "MARGINAL",
+                        f"n = {len(x)} paired observations.")]
+
+
+def _glm_count(df: pd.DataFrame, outcome: str, regressor: Optional[str],
+               neg_binom: bool) -> dict[str, Any]:
+    import statsmodels.api as sm
+    import statsmodels.formula.api as smf
+    name = "NEGATIVE_BINOMIAL_REGRESSION" if neg_binom else "POISSON_REGRESSION"
+    if not regressor:
+        return _not_implemented(name)
+    d = df[[outcome, regressor]].copy()
+    d.columns = ["_y", "_x"]
+    d["_y"] = pd.to_numeric(d["_y"], errors="coerce")
+    d = d.dropna()
+    if len(d) < 5:
+        return _not_implemented(name)
+    numeric_x = pd.api.types.is_numeric_dtype(pd.to_numeric(d["_x"], errors="coerce")) and \
+        pd.to_numeric(d["_x"], errors="coerce").notna().all()
+    if numeric_x:
+        d["_x"] = pd.to_numeric(d["_x"], errors="coerce")
+        formula = "_y ~ _x"
+    else:
+        formula = "_y ~ C(_x)"
+    family = sm.families.NegativeBinomial() if neg_binom else sm.families.Poisson()
+    try:
+        model = smf.glm(formula, data=d, family=family).fit()
+    except Exception:
+        return _not_implemented(name)
+    params = model.params.drop("Intercept", errors="ignore")
+    if len(params) == 0:
+        return _not_implemented(name)
+    key = params.index[0]
+    coef = float(params.iloc[0])
+    irr = math.exp(coef)
+    conf = model.conf_int().loc[key]
+    irr_lo, irr_hi = math.exp(float(conf.iloc[0])), math.exp(float(conf.iloc[1]))
+    p = float(model.pvalues[key])
+    stat = float(model.tvalues[key])
+    checks = [_check("Count outcome", "MET", "Outcome treated as non-negative counts."),
+              _check("Overdispersion",
+                     "MET" if neg_binom else "MARGINAL",
+                     "Negative-binomial relaxes the variance = mean assumption." if neg_binom
+                     else "Verify variance ≈ mean; prefer negative binomial if overdispersed.")]
+    return _result(name, stat, p, None, "incidence-rate ratio", irr, "r",
+                   irr_lo, irr_hi, checks, (irr_lo, irr_hi),
+                   [f"IRR = exp(β) for {regressor}; CI back-transformed from the log scale."])
+
+
+# ── public entry point ────────────────────────────────────────────────────────
+
+def execute(
+    test_name: str,
+    df: pd.DataFrame,
+    outcome: str,
+    group: Optional[str],
+    predictor: Optional[str],
+    design: dict[str, Any],
+    selection: Any,
+) -> dict[str, Any]:
+    """Run `test_name` on the data and return a TestResult-shaped dict."""
+    try:
+        if test_name == "WELCH_T":
+            return _two_sample_t(df, outcome, group, equal_var=False)  # type: ignore[arg-type]
+        if test_name == "INDEPENDENT_T":
+            return _two_sample_t(df, outcome, group, equal_var=True)   # type: ignore[arg-type]
+        if test_name == "MANN_WHITNEY_U":
+            return _mann_whitney(df, outcome, group)                   # type: ignore[arg-type]
+        if test_name == "PAIRED_T":
+            return _paired_t(df, outcome, group)                       # type: ignore[arg-type]
+        if test_name == "WILCOXON_SIGNED_RANK":
+            return _wilcoxon(df, outcome, group)                       # type: ignore[arg-type]
+        if test_name == "WELCH_ANOVA":
+            return _anova(df, outcome, group, welch=True)              # type: ignore[arg-type]
+        if test_name == "ONE_WAY_ANOVA":
+            return _anova(df, outcome, group, welch=False)             # type: ignore[arg-type]
+        if test_name == "KRUSKAL_WALLIS":
+            return _kruskal(df, outcome, group)                        # type: ignore[arg-type]
+        if test_name == "CHI_SQUARED":
+            return _chi_squared(df, outcome, group)                    # type: ignore[arg-type]
+        if test_name == "FISHER_EXACT":
+            return _fisher(df, outcome, group)                         # type: ignore[arg-type]
+        if test_name == "MCNEMAR":
+            return _mcnemar(df, outcome, group)                        # type: ignore[arg-type]
+        if test_name == "PEARSON_CORRELATION":
+            return _pearson(df, outcome, predictor, selection)         # type: ignore[arg-type]
+        if test_name == "SPEARMAN_CORRELATION":
+            return _spearman(df, outcome, predictor, selection)        # type: ignore[arg-type]
+        if test_name == "MAXBET":
+            return _maxbet(df, outcome, predictor)                     # type: ignore[arg-type]
+        if test_name == "POISSON_REGRESSION":
+            return _glm_count(df, outcome, predictor or group, neg_binom=False)
+        if test_name == "NEGATIVE_BINOMIAL_REGRESSION":
+            return _glm_count(df, outcome, predictor or group, neg_binom=True)
+    except Exception as exc:  # never 500 the whole run on a single-test failure
+        return _result(test_name if test_name else "—", 0.0, 1.0, None, "—", 0.0, "r",
+                       0.0, 0.0, [_check("Execution", "UNTESTABLE", f"Test failed: {exc}")],
+                       (0.0, 0.0), [f"Execution error: {exc}"])
+    return _not_implemented(test_name or "—")
