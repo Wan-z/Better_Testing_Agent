@@ -7,7 +7,7 @@ interface Props {
   messages: any[]            // kept for interface compatibility
   studyDesign: StudyDesign | null
   onSend: (msg: string) => Promise<void>   // kept for interface compatibility
-  onConfirm: (design: StudyDesign) => void
+  onConfirm: (design: StudyDesign) => void | Promise<void>
 }
 
 // ── Option card ────────────────────────────────────────────────────────────────

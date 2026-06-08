@@ -1,6 +1,6 @@
 // Real API client — all calls go to /api (proxied to FastAPI in dev).
 
-import type { SessionResponse, UploadResponse, VariablesPayload } from '../types/api'
+import type { SessionResponse, StudyDesign, UploadResponse, VariablesPayload } from '../types/api'
 
 const BASE = '/api'
 
@@ -36,6 +36,15 @@ export async function setVariables(sessionId: string, payload: VariablesPayload)
     method: 'PATCH',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(payload),
+  })
+  if (!res.ok) throw new Error(await res.text())
+}
+
+export async function saveDesign(sessionId: string, design: StudyDesign): Promise<void> {
+  const res = await fetch(`${BASE}/sessions/${sessionId}/design`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(design),
   })
   if (!res.ok) throw new Error(await res.text())
 }

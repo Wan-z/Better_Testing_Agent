@@ -3,7 +3,7 @@ import type {
   SessionStatus, VariableType, StudyDesign, DataProfile,
   Report, DialogueMessage, VariablesPayload,
 } from '../types/api'
-import { upload as apiUpload, setVariables as apiSetVariables, getSession, dialogueTurn, runAnalysis as apiRunAnalysis } from '../api/client'
+import { upload as apiUpload, setVariables as apiSetVariables, saveDesign as apiSaveDesign, getSession, dialogueTurn, runAnalysis as apiRunAnalysis } from '../api/client'
 
 export interface SessionState {
   sessionId: string | null
@@ -110,24 +110,31 @@ export function useSession() {
     })
   }, [state, update])
 
-  const confirmDesign = useCallback((design: StudyDesign) => {
+  const confirmDesign = useCallback(async (design: StudyDesign) => {
     update({ studyDesign: design, step: 4 })
-  }, [update])
+    if (state.sessionId) {
+      try { await apiSaveDesign(state.sessionId, design) } catch { /* non-fatal — run uses DEFAULT_DESIGN as fallback */ }
+    }
+  }, [state.sessionId, update])
 
   // Step 4 — run analysis (streamed)
   const runAnalysis = useCallback(async () => {
     if (!state.sessionId) return
-    update({ step: 5, status: 'RUNNING', progressMessage: 'Starting analysis…', progressStage: '' })
+    update({ step: 5, status: 'RUNNING', progressMessage: 'Starting analysis…', progressStage: '', error: null })
 
-    for await (const event of apiRunAnalysis(state.sessionId)) {
-      if (event.type === 'progress' && typeof event.message === 'string') {
-        update({
-          progressMessage: event.message,
-          progressStage: typeof event.stage === 'string' ? event.stage : '',
-        })
-      } else if (event.type === 'result' && event.report) {
-        update({ report: event.report as Report, status: 'COMPLETE', progressMessage: '', progressStage: '' })
+    try {
+      for await (const event of apiRunAnalysis(state.sessionId)) {
+        if (event.type === 'progress' && typeof event.message === 'string') {
+          update({
+            progressMessage: event.message,
+            progressStage: typeof event.stage === 'string' ? event.stage : '',
+          })
+        } else if (event.type === 'result' && event.report) {
+          update({ report: event.report as Report, status: 'COMPLETE', progressMessage: '', progressStage: '' })
+        }
       }
+    } catch (e) {
+      update({ status: 'FAILED', progressMessage: '', progressStage: '', error: String(e) })
     }
   }, [state.sessionId, update])
 

@@ -7,13 +7,26 @@ interface Props {
   sessionId: string | null
   progressMessage: string
   progressStage: string
+  error: string | null
   onReset: () => void
 }
 
 const STAGES = ['selecting_test', 'executing_test', 'generating_report']
 const STAGE_LABELS = ['Selecting test', 'Running test', 'Generating report']
 
-export default function StepResults({ report, sessionId, progressMessage, progressStage, onReset }: Props) {
+export default function StepResults({ report, sessionId, progressMessage, progressStage, error, onReset }: Props) {
+  if (error) {
+    return (
+      <div className="max-w-md mx-auto text-center py-20">
+        <p className="text-lg font-semibold text-red-700 mb-3">Analysis failed</p>
+        <p className="text-sm text-slate-500 mb-6 font-mono bg-slate-50 border border-slate-200 rounded-lg px-4 py-3">{error}</p>
+        <button onClick={onReset} className="flex items-center gap-2 px-4 py-2 text-sm text-slate-600 border border-slate-200 rounded-lg hover:bg-slate-50 transition-colors mx-auto">
+          <RotateCcw size={14} /> Start over
+        </button>
+      </div>
+    )
+  }
+
   if (!report) {
     const stageIdx = STAGES.indexOf(progressStage)
     const active = stageIdx >= 0 ? stageIdx : 0

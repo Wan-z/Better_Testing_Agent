@@ -12,6 +12,18 @@ const TEST_LABELS: Record<string, string> = {
   FISHER_EXACT: "Fisher's exact", MCNEMAR: 'McNemar',
   PEARSON_CORRELATION: 'Pearson correlation', SPEARMAN_CORRELATION: 'Spearman correlation',
   MAXBET: 'MaxBET (nonlinear independence)',
+  WELCH_ANOVA: "Welch's ANOVA",
+  POISSON_REGRESSION: 'Poisson regression', NEGATIVE_BINOMIAL_REGRESSION: 'Negative binomial regression',
+}
+
+const STAT_LABELS: Record<string, string> = {
+  WELCH_T: 't', INDEPENDENT_T: 't', PAIRED_T: 't',
+  MANN_WHITNEY_U: 'U', WILCOXON_SIGNED_RANK: 'W',
+  WELCH_ANOVA: 'F', ONE_WAY_ANOVA: 'F', KRUSKAL_WALLIS: 'H',
+  CHI_SQUARED: 'χ²', FISHER_EXACT: 'χ²', MCNEMAR: 'χ²',
+  PEARSON_CORRELATION: 'r', SPEARMAN_CORRELATION: 'ρ',
+  MAXBET: 'Z',
+  POISSON_REGRESSION: 'z', NEGATIVE_BINOMIAL_REGRESSION: 'z',
 }
 
 function fmt(n: number, decimals = 3) {
@@ -47,9 +59,7 @@ export default function ResultsView({ report, sessionId }: Props) {
           <details className="mt-2">
             <summary className="text-xs text-brand cursor-pointer hover:underline">Why this test?</summary>
             <p className="mt-2 text-xs text-slate-600 leading-relaxed">
-              Between-subjects design with a continuous outcome and 2 groups. Welch's variant
-              is the default — it does not require equal variances and is nearly as powerful
-              as Student's t when variances are equal.
+              {report.methods_text.split('.')[0]}.
             </p>
           </details>
         </div>
@@ -112,7 +122,9 @@ export default function ResultsView({ report, sessionId }: Props) {
           <div className="mt-4 flex flex-wrap gap-6 text-sm">
             <div>
               <p className="text-slate-500 text-xs">Statistic</p>
-              <p className="text-xl font-bold text-slate-900">t = {fmt(tr.statistic, 2)}</p>
+              <p className="text-xl font-bold text-slate-900">
+                {STAT_LABELS[tr.test_used] ?? 'stat'} = {fmt(tr.statistic, 2)}
+              </p>
             </div>
             {tr.degrees_of_freedom != null && (
               <div>

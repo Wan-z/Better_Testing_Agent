@@ -79,6 +79,7 @@ export default function Wizard() {
             sessionId={state.sessionId}
             progressMessage={state.progressMessage}
             progressStage={state.progressStage}
+            error={state.error}
             onReset={session.reset}
           />
         )}

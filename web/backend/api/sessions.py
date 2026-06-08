@@ -391,6 +391,15 @@ async def set_variables(session_id: str, payload: VariablesPayload) -> dict[str,
     return {"status": "ok"}
 
 
+@router.patch("/sessions/{session_id}/design")
+async def set_design(session_id: str, payload: dict[str, Any]) -> dict[str, str]:
+    if not store.exists(session_id, "metadata.json"):
+        raise HTTPException(status_code=404, detail="Session not found.")
+    store.write_json(session_id, "design.json", payload)
+    store.set_status(session_id, "DESIGNED")
+    return {"status": "ok"}
+
+
 @router.get("/sessions/{session_id}", response_model=SessionResponse)
 async def get_session(session_id: str) -> SessionResponse:
     if not store.exists(session_id, "metadata.json"):
