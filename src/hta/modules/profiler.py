@@ -220,7 +220,9 @@ def profile_with_screen(
         VariableType,
     )
 
-    cols = {col: profile_column(col, df[col].astype(str).tolist()) for col in df.columns}
+    # astype(str) on float64 columns leaves NaN as float objects in newer pandas;
+    # apply(str) uses Python's str() which correctly converts float('nan') → 'nan'.
+    cols = {col: profile_column(col, df[col].apply(str).tolist()) for col in df.columns}
     variables: list[Variable] = []
 
     for col in df.columns:

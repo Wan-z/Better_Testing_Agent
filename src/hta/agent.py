@@ -101,8 +101,8 @@ class HypothesisTestingAgent:
         design = design or _default_design()
         graph = CausalAnalyser().analyse(profile, design)   # causal stage (§5.3)
 
-        cols = {c: profile_column(c, df[c].astype(str).tolist()) for c in df.columns}
-        raw = {c: df[c].astype(str).tolist() for c in df.columns}
+        cols = {c: profile_column(c, df[c].apply(str).tolist()) for c in df.columns}
+        raw = {c: df[c].apply(str).tolist() for c in df.columns}
         predictor = predictor_variable or _choose_predictor(df, cols, outcome_variable,
                                                              group_variable)
 
