@@ -42,7 +42,7 @@ def _infer_types(df: pd.DataFrame) -> dict[str, str]:
     from playground.pipeline import profile_column
 
     return {
-        col: profile_column(col, df[col].astype(str).tolist()).var_type
+        col: profile_column(col, df[col].apply(str).tolist()).var_type
         for col in df.columns
     }
 

@@ -135,8 +135,8 @@ async def _run_live(session_id: str) -> object:
     design = (json.loads(store.read(session_id, "design.json"))
               if store.exists(session_id, "design.json") else dict(DEFAULT_DESIGN))
 
-    cols = {c: profile_column(c, df[c].astype(str).tolist()) for c in df.columns}
-    raw = {c: df[c].astype(str).tolist() for c in df.columns}
+    cols = {c: profile_column(c, df[c].apply(str).tolist()) for c in df.columns}
+    raw = {c: df[c].apply(str).tolist() for c in df.columns}
     predictor = _choose_predictor(df, cols, outcome, group)
 
     # ── Step B: select test ───────────────────────────────────────────────────
@@ -205,8 +205,8 @@ async def preview_test(session_id: str) -> dict[str, Any]:
     from hta.modules.profiler import profile_column
     from hta.modules.selector import select
 
-    cols = {c: profile_column(c, df[c].astype(str).tolist()) for c in df.columns}
-    raw = {c: df[c].astype(str).tolist() for c in df.columns}
+    cols = {c: profile_column(c, df[c].apply(str).tolist()) for c in df.columns}
+    raw = {c: df[c].apply(str).tolist() for c in df.columns}
     predictor = _choose_predictor(df, cols, outcome, group)
     selection = select(cols, outcome, group, predictor, hypothesis, raw)
 
