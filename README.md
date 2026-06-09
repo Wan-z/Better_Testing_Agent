@@ -8,12 +8,19 @@ caveats, and a methods text ready to paste into a manuscript.
 ## How it works
 
 ```
-Upload CSV → Select variables → Design dialogue (LLM) → Statistical test → Report
+Upload CSV → Select variables → Design form → Review (BET EDA) → Statistical test → Report
 ```
 
-A conversational LLM elicits study design information (experimental vs observational,
-measurement type, confounders, relationship form). This drives test selection. The full
-pipeline streams results in real time and exports a self-contained HTML report.
+A structured design form captures study-design information (experimental vs observational,
+measurement type, randomisation, confounders, relationship form). The full pipeline streams
+results in real time and exports a self-contained HTML report. An LLM-based conversational
+dialogue backend (`POST /api/sessions/{id}/dialogue`) is also implemented and available for
+integration, but the current web UI uses the structured form.
+
+> **Implementation status (2026-06-09):** All core modules are complete and 203/203 tests pass.
+> The full web pipeline is live end-to-end (upload → design → BET EDA review → execute → report → HTML export).
+> See [IMPLEMENTATION_PLAN.md](IMPLEMENTATION_PLAN.md) and [WEBSITE_DESIGN.md](WEBSITE_DESIGN.md) for
+> remaining gaps.
 
 ## Pipeline architecture
 
@@ -97,7 +104,8 @@ nonlinear gene pair created by a cancer-subtype mixture, with the joint-classifi
 
 - Python ≥ 3.11
 - Node.js ≥ 20 (web frontend only)
-- Azure OpenAI access (GPT-5.4 endpoint)
+- An LLM API key — either **Anthropic** (Claude) or **OpenAI / Azure OpenAI** — for the
+  plain-language summary and methods text in live mode. Not required in dry-run mode.
 
 ## Installation
 
@@ -108,7 +116,7 @@ cd Better_Testing_Agent
 # Conda environment (recommended)
 conda create -n hta python=3.11 && conda activate hta
 
-# Core + dev tools
+# Core + dev tools (includes scipy, statsmodels, pingouin, lifelines, scikit-posthocs, …)
 pip install -e ".[dev]"
 
 # Web backend (FastAPI, Jinja2, …)
@@ -120,14 +128,21 @@ cd web/frontend && npm install
 
 ## Configuration
 
-Create a `.env` file in the project root:
+Create a `.env` file in the project root. Choose **one** LLM provider:
 
 ```bash
-AZURE_OPENAI_API_KEY=your_key_here
-AZURE_OPENAI_ENDPOINT=https://your-endpoint.openai.azure.com
-AZURE_OPENAI_DEPLOYMENT=gpt-5.4
+# === Option A — Anthropic (Claude) ===
+LLM_PROVIDER=anthropic
+ANTHROPIC_API_KEY=your_key_here
+ANTHROPIC_MODEL=claude-sonnet-4-6        # default
 
-# Optional overrides
+# === Option B — OpenAI or Azure OpenAI ===
+LLM_PROVIDER=openai
+OPENAI_API_KEY=your_key_here
+OPENAI_BASE_URL=https://your-endpoint.openai.azure.com   # omit for public OpenAI
+OPENAI_MODEL=gpt-4o                      # or your Azure deployment name
+
+# === Statistical / session defaults ===
 HTA_DEFAULT_DRY_RUN=false   # true = use stub data, no API calls
 HTA_SESSION_TTL_DAYS=7
 HTA_LOG_LEVEL=INFO

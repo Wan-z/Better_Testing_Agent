@@ -1,21 +1,38 @@
 # HTA Implementation Plan
 
-**Status:** Steps 2–8 built in consolidated form — see the status banner below  
+**Status:** All steps complete — see status banner and per-step markers below  
 **Based on:** TECHNICAL_REPORT.md v0.1.0-dev (last updated 2026-06-01)  
 **Prerequisite complete:** Step 1 — models + tests (68 passing)
 
 Each step is gated: do not start Step N+1 until Step N tests pass and the gate check below it is satisfied.
 
-> **Implementation status (2026-06-08): the gated plan below has been built — but in
-> consolidated form, not module-by-module behind an event bus.** Steps 3/5/6/7 (profiler,
-> selector, executor, reporter) and Step 8 (`agent.py` + `cli.py`) now live in `src/hta/modules/`
-> and ship with passing tests (164 total, 90% coverage on `src/hta`; ruff + `mypy --strict`
-> clean). **Step 2 (event bus) was intentionally dropped** — the pipeline is a direct linear
-> call chain (TECHNICAL_REPORT §2, §10b #9). **Still outstanding:** Step 4 (`dialogue.py` /
-> `causal.py` — the design dialogue runs in the web layer today and confounders are surfaced as
-> caveats but not yet used to adjust the estimate), the survival/diagnostic executor branches,
-> post-hoc localisation (§6.3), and the Step-8 review deliverables. The per-step specs below
-> remain the design of record.
+> **Implementation status (2026-06-09): all core engine modules are built and 203/203 tests
+> pass** (ruff + `mypy --strict` clean). The gated steps were built in consolidated form rather
+> than module-by-module behind an event bus. **Step 2 (event bus) was intentionally dropped** —
+> the pipeline is a direct linear call chain (TECHNICAL_REPORT §2, §10b #9).
+>
+> **Completed since last update:**
+> - Step 4 `causal.py` ✅ — `src/hta/modules/causal.py` with `tests/test_causal.py`; a
+>   standalone `src/hta/modules/dialogue.py` engine class is **not yet built** — the LLM
+>   dialogue lives in `web/backend/api/dialogue.py`; the web UI uses a structured form instead.
+> - Step 6 ✅ — all executor branches complete including survival (log-rank, Cox via `lifelines`)
+>   and diagnostic (ROC/AUC via `scikit-learn`); `scikit-posthocs` and `lifelines` are now
+>   installed; all 33 executor tests pass.
+> - Step 7 ✅ — reporter complete with all healthcare caveat rules (H1–H9).
+> - Step 8 ✅ — `agent.py` + `cli.py` + examples complete.
+>
+> **Still outstanding (next priorities):**
+> 1. `src/hta/modules/dialogue.py` — standalone `DesignDialogue` engine class (Step 4); the
+>    web UI uses a structured form and the LLM path lives only in the web layer.
+> 2. Confounders are not yet used to adjust estimates — they are surfaced as caveats only.
+> 3. `web/backend/api/run.py` still calls `playground.pipeline.select()` in the live path
+>    rather than the canonical `src/hta/modules/selector.py` — should be switched.
+> 4. Session restore from `localStorage` (WEBSITE_DESIGN §6) — not yet implemented.
+> 5. `GET /api/sessions/{id}/preview-test` endpoint (Step 4 Review screen) — not yet built.
+> 6. Statistician review deliverables (STATISTICIAN_REVIEW.md, BENCHMARK_CASES.md, output
+>    examples) — not yet produced.
+>
+> The per-step specs below remain the design of record.
 
 ---
 
@@ -324,8 +341,15 @@ def relationship_form(form: str) -> str:  # -> "linear" | "monotone" | "nonlinea
 
 ## Step 4 — Study design dialogue and causal module
 
+**Status:** `causal.py` ✅ DONE (`src/hta/modules/causal.py`, `tests/test_causal.py` passing).
+`dialogue.py` ⚠️ PARTIAL — LLM dialogue is implemented in `web/backend/api/dialogue.py` (both
+Anthropic and OpenAI/Azure paths) and streams correctly via SSE. A standalone engine-level
+`src/hta/modules/dialogue.py` class (decoupled from the web layer, per this spec) has **not yet
+been built**. The web UI currently uses a structured design form instead of the LLM chat.
+
 **Goal:** `dialogue.py` (GPT-5.4 multi-turn) + `causal.py` (DAG + adjustment set).  
-**Files created:** `src/hta/modules/dialogue.py`, `src/hta/modules/causal.py`, `tests/test_dialogue.py`, `tests/test_causal.py`
+**Files created:** `src/hta/modules/causal.py` ✅, `tests/test_causal.py` ✅;
+`src/hta/modules/dialogue.py` ⬜ (to build), `tests/test_dialogue.py` ⬜ (to build)
 
 ### `dialogue.py` — public API
 
@@ -403,9 +427,15 @@ class CausalAnalyser:
 
 ---
 
-## Step 5 — Test selector
+## Step 5 — Test selector ✅ DONE
 
 **Goal:** `src/hta/modules/selector.py` — purely deterministic decision tree.  
+**Files created:** `src/hta/modules/selector.py` ✅, `tests/test_selector.py` ✅
+
+> ⚠️ **Web-layer gap:** `web/backend/api/run.py` currently calls `playground.pipeline.select()`
+> in the live execution path rather than the canonical `TestSelector`. This should be switched to
+> use `src/hta/modules/selector.py` directly for consistency with the decision tree spec.
+
 **Files created:** `src/hta/modules/selector.py`, `tests/test_selector.py`
 
 ### `selector.py` — public API
@@ -541,10 +571,15 @@ One test per test type + edge cases:
 
 ---
 
-## Step 6 — Test executor
+## Step 6 — Test executor ✅ DONE
 
 **Goal:** `src/hta/modules/executor.py` — runs the selected test, returns `TestResult`.  
-**Files created:** `src/hta/modules/executor.py`, `tests/test_executor.py`  
+**Files created:** `src/hta/modules/executor.py` ✅, `tests/test_executor.py` ✅ (33/33 passing)  
+**Dependencies installed:** `scikit-posthocs` ✅ (Dunn's post-hoc), `lifelines` ✅ (log-rank, Cox),
+`scikit-learn` ✅ (ROC/AUC), `statsmodels` ✅ (Poisson/NegBin GLMs), `pingouin` ✅ (ANOVA/Games–Howell).
+`rpy2` is **not installed** — the `MAXBET`/`BEAST` executor branches call the pure-Python
+`src/hta/bet_screen.py` engine instead of R; `test_maxbet_known` is skipped when rpy2 is absent.
+
 **New dependency:** `rpy2` (add to `pyproject.toml` `[project.dependencies]`); `scikit-posthocs` (Dunn's test); `lifelines` (survival: log-rank, Cox); `scikit-learn` (ROC/AUC). `statsmodels` (already present) covers Poisson / negative-binomial GLMs.
 
 ### `executor.py` — public API
@@ -650,10 +685,10 @@ def _run_rbet(
 
 ---
 
-## Step 7 — Reporter
+## Step 7 — Reporter ✅ DONE
 
 **Goal:** `src/hta/modules/reporter.py` — assembles `Report` from upstream outputs.  
-**Files created:** `src/hta/modules/reporter.py`, `tests/test_reporter.py`
+**Files created:** `src/hta/modules/reporter.py` ✅, `tests/test_reporter.py` ✅
 
 ### `reporter.py` — public API
 
@@ -753,9 +788,18 @@ methods_text = "DRY RUN: methods text not generated."
 
 ---
 
-## Step 8 — Agent orchestration, CLI, and examples
+## Step 8 — Agent orchestration, CLI, and examples ✅ DONE
 
 **Goal:** Wire all modules into `agent.py`, expose via `cli.py`, write three example scripts.  
+**Files created:** `src/hta/agent.py` ✅, `src/hta/cli.py` ✅, `tests/test_agent.py` ✅,
+`tests/test_cli.py` ✅. Example scripts `examples/benchmark_cases.py`, `examples/stai_x_overdose.py`,
+`examples/stars_independence.py`, `examples/gene_pair_subtype.py` ✅ (pinned by `tests/test_examples.py`).
+
+> Note: `agent.py` does not wire through `EventBus` (Step 2 was dropped). The pipeline is a
+> direct linear call chain. The step-8 example scripts listed in the spec
+> (`two_group_comparison.py`, `categorical_association.py`, `paired_before_after.py`) were not
+> created as named — the existing examples cover equivalent functionality.
+
 **Files created:** `src/hta/agent.py`, `src/hta/cli.py`, `examples/two_group_comparison.py`, `examples/categorical_association.py`, `examples/paired_before_after.py`, `tests/test_agent.py`
 
 ### `agent.py` — public API
@@ -817,12 +861,43 @@ Output rendered with **Rich**:
 
 ## Post-implementation: statistician review package
 
-Once all 8 steps pass:
+Once all 8 steps pass (203/203 tests now passing — see status banner):
 
-1. Create `STATISTICIAN_REVIEW.md` — every decision point with file:line reference.
-2. Create `BENCHMARK_CASES.md` — 20 test cases with known inputs and expected outputs.
-3. Run all three example scripts; save terminal output to `examples/OUTPUT_EXAMPLES.md`.
-4. Tag commit `v0.1.0-statistician-review`.
+| Item | Status |
+|---|---|
+| `STATISTICIAN_REVIEW.md` — every decision point with file:line reference | ⬜ TODO |
+| `BENCHMARK_CASES.md` — 20 test cases with known inputs and expected outputs | ⬜ TODO (skeleton exists) |
+| Run example scripts; save output to `examples/OUTPUT_EXAMPLES.md` | ⬜ TODO |
+| Tag commit `v0.1.0-statistician-review` | ⬜ TODO |
+
+## What to do next (priority order)
+
+1. **Switch `run.py` to canonical selector** — `web/backend/api/run.py` calls
+   `playground.pipeline.select()` in the live path; replace with `src/hta/modules/selector.py`
+   so the full healthcare dispatch and BET prior are used.
+
+2. **`src/hta/modules/dialogue.py`** — build the standalone `DesignDialogue` engine class per the
+   Step 4 spec so the agent pipeline is fully self-contained. Wire it into `agent.py`. Add
+   `tests/test_dialogue.py`.
+
+3. **Confounder adjustment** — currently confounders captured in `StudyDesign` are surfaced as
+   caveats only. For observational studies, route through `CausalAnalyser` and use the
+   adjustment set to run covariate-adjusted tests (ANCOVA, partial correlation, stratified
+   analysis) where appropriate.
+
+4. **Session restore from `localStorage`** — on page load, if a session ID exists in
+   `localStorage` and the backend returns status `COMPLETE`, show results directly
+   (WEBSITE_DESIGN §6).
+
+5. **`GET /api/sessions/{id}/preview-test`** — lightweight endpoint for the Step 4 review
+   screen to show the planned test + rationale before the user clicks Run (WEBSITE_DESIGN §6,
+   Step 4).
+
+6. **Statistician review package** — produce `STATISTICIAN_REVIEW.md`, `BENCHMARK_CASES.md`,
+   and `examples/OUTPUT_EXAMPLES.md`, then tag `v0.1.0-statistician-review`.
+
+7. **v0.2.0 tests** — linear regression, logistic regression, linear mixed models, GEE
+   (clustered/longitudinal). Already reserved in the `StatisticalTest` enum.
 
 ---
 

@@ -1,8 +1,8 @@
 # HTA Website Design Specification
 
-**Version:** 0.2  
-**Date:** 2026-06-02  
-**Status:** Design — ready for review before implementation  
+**Version:** 0.3  
+**Date:** 2026-06-09  
+**Status:** Implemented — see phase checklists and gap notes below  
 **Scope:** Local-first development; cloud-ready architecture
 
 ---
@@ -712,58 +712,92 @@ The following are baked in from day one so the cloud migration is a config chang
 
 The website is built in three phases, each independently testable.
 
-### Phase W1 — Backend skeleton (no LLM, dry-run only)
+### Phase W1 — Backend skeleton (no LLM, dry-run only) ✅ COMPLETE
 
 **Goal:** All API endpoints working; sessions stored; pipeline runs in dry-run mode.
 
-- [ ] `web/backend/main.py` — FastAPI app with CORS, error handlers, lifespan cleanup task
-- [ ] `web/backend/storage/base.py` + `local.py` — `LocalStorage` implementation
-- [ ] `web/backend/schemas.py` — request/response Pydantic models
-- [ ] `web/backend/api/sessions.py` — upload, PATCH variables, GET session
-- [ ] `web/backend/api/run.py` — SSE pipeline execution (dry-run)
-- [ ] `web/backend/plots.py` — `PlotSpec → Plotly JSON`
-- [ ] `web/backend/export.py` + `templates/report.html.j2` — self-contained HTML report
-- [ ] `web/backend/api/export.py` — HTML download endpoint
-- [ ] `web/docker-compose.yml` + Dockerfiles
-- [ ] Manual test: `curl` through the full upload → run → export flow
+- [x] `web/backend/main.py` — FastAPI app with CORS, error handlers, lifespan cleanup task
+- [x] `web/backend/storage/base.py` + `local.py` — `LocalStorage` implementation
+- [x] `web/backend/schemas.py` — request/response Pydantic models
+- [x] `web/backend/api/sessions.py` — upload, `PATCH /variables`, `PATCH /design`, `GET` session
+- [x] `web/backend/api/run.py` — SSE pipeline execution (dry-run + live mode)
+- [x] `web/backend/plots.py` — `PlotSpec → Plotly JSON` (including BET interaction + network plots)
+- [x] `web/backend/export.py` + `templates/report.html.j2` — self-contained HTML report
+- [x] `web/backend/api/export.py` — HTML download endpoint
+- [x] `web/docker-compose.yml` + Dockerfiles
+- [x] Live mode: `web/backend/executor.py` + `web/backend/reporter.py` — thin adapters wrapping canonical engine
 
-**Gate:** Full dry-run pipeline accessible via `curl` with correct JSON responses.
+> ⚠️ **Gap:** `run.py` live path calls `playground.pipeline.select()` rather than the canonical
+> `src/hta/modules/selector.py`. Should be switched so the full healthcare dispatch and BET prior
+> are used (see IMPLEMENTATION_PLAN.md "What to do next" item 1).
+
+**Gate:** Full dry-run pipeline accessible via `curl` with correct JSON responses. ✅
 
 ---
 
-### Phase W2 — Frontend wizard
+### Phase W2 — Frontend wizard ✅ COMPLETE (one gap)
 
 **Goal:** Working UI connected to the Phase W1 backend; real-time SSE not yet wired.
 
-- [ ] Vite + React + TypeScript + Tailwind project setup
-- [ ] `types/api.ts` — TypeScript types matching all Pydantic schemas
-- [ ] `api/client.ts` — typed fetch wrappers
-- [ ] `Landing.tsx` — hero + how-it-works + CTA
-- [ ] `Wizard.tsx` — step controller + progress bar
-- [ ] `StepUpload.tsx` — drag-drop + preview table + type chips
-- [ ] `StepVariables.tsx` — dropdowns + hypothesis textarea + example chips
-- [ ] `StepReview.tsx` — confirmation cards + run button
-- [ ] `StepResults.tsx` — results layout (static mock data first)
-- [ ] All Results sub-components: `PrimaryResult`, `EffectSizeCard`, `AssumptionTable`, `CaveatList`, `PlotViewer`, `PlainSummary`, `MethodsText`, `ExportBar`
-- [ ] `About.tsx`
-- [ ] `localStorage` session restore
+- [x] Vite + React + TypeScript + Tailwind project setup
+- [x] `types/api.ts` — TypeScript types matching all Pydantic schemas (incl. BET EDA types)
+- [x] `api/client.ts` — typed fetch wrappers for all endpoints
+- [x] `Landing.tsx` — hero + how-it-works + CTA
+- [x] `Wizard.tsx` — step controller + progress bar
+- [x] `StepUpload.tsx` — drag-drop + preview table
+- [x] `StepVariables.tsx` — dropdowns + hypothesis textarea
+- [x] `StepReview.tsx` — BET EDA plots (interaction + dependence network) + confirm/run button
+- [x] `StepResults.tsx` — results layout with progress indicator and error display
+- [x] Results view: primary result, effect size, assumption checks, caveats, plots, methods text, export — consolidated in `Results/index.tsx` + `Results/PlotViewer.tsx`
+- [x] `About.tsx`
+- [x] `shared/ErrorBoundary.tsx` — catches render errors
+- [ ] `localStorage` session restore — **⬜ NOT YET DONE** (WEBSITE_DESIGN §6 spec; priority item 4 in IMPLEMENTATION_PLAN.md "What to do next")
 
-**Gate:** Full wizard flow completes end-to-end with dry-run data; results render correctly.
+> **Design deviation:** The spec's Results sub-components (`PrimaryResult.tsx`, `EffectSizeCard.tsx`,
+> etc.) are consolidated into `Results/index.tsx` rather than separate files. Functionally equivalent.
 
----
-
-### Phase W3 — Real-time dialogue and live LLM
-
-**Goal:** SSE dialogue working; `StepDialogue.tsx` wired up; live API key required.
-
-- [ ] `web/backend/api/dialogue.py` — SSE dialogue endpoint with streaming GPT-5.4
-- [ ] `web/backend/main.py` — register dialogue router
-- [ ] `useSSE.ts` hook
-- [ ] `StepDialogue.tsx` — chat window + token streaming + study design summary card + inline edit
-- [ ] End-to-end test: full analysis with live LLM from browser to report
-
-**Gate:** Full analysis completes live from browser with a real CSV and a real API key.
+**Gate:** Full wizard flow completes end-to-end with dry-run data; results render correctly. ✅
 
 ---
 
-*Last updated: 2026-06-02. v0.2: export format changed from PDF+Markdown to self-contained HTML (Jinja2 template, no system deps). v0.1: initial design.*
+### Phase W3 — Real-time dialogue and live LLM ✅ COMPLETE (with design change)
+
+**Goal:** SSE dialogue working; design capture wired up; live API key required.
+
+- [x] `web/backend/api/dialogue.py` — SSE dialogue endpoint; supports both **Anthropic** and
+  **OpenAI/Azure** via `LLM_PROVIDER` env var; multi-turn context stored in `dialogue_history.json`
+- [x] `web/backend/main.py` — dialogue router registered
+- [x] SSE streaming for both dialogue and pipeline run (inline in `useSession.ts`, no separate `useSSE.ts`)
+- [x] `PATCH /api/sessions/{id}/design` — design saved to backend before pipeline runs
+- [x] `StepDialogue.tsx` — **implemented as a structured design form** (not the LLM chat originally
+  specified). The form captures design type, measurement type, randomisation, and confounders
+  directly and calls `PATCH /api/sessions/{id}/design`. The LLM dialogue backend exists and
+  works but is not connected to the current UI.
+- [x] End-to-end live analysis: CSV upload → design form → BET EDA review → pipeline run → HTML report ✅
+
+> **Design deviation:** Step 3 is a structured form rather than the LLM chat window specified here.
+> The LLM dialogue backend (`POST /api/sessions/{id}/dialogue`) is implemented and tested but
+> not wired to the UI. Reconnecting the chat UI is a future option.
+>
+> ⚠️ **Gap:** `GET /api/sessions/{id}/preview-test` (planned test + rationale on the Step 4
+> review screen) is **not yet built** (IMPLEMENTATION_PLAN.md "What to do next" item 5).
+
+**Gate:** Full analysis completes live from browser with a real CSV and an API key. ✅
+
+---
+
+## What to do next (web layer)
+
+| # | Item | Notes |
+|---|---|---|
+| 1 | Switch `run.py` to canonical `selector.py` | Remove `playground.pipeline.select()` dependency |
+| 2 | `localStorage` session restore | Show results on refresh for COMPLETE sessions |
+| 3 | `GET /api/sessions/{id}/preview-test` | Show planned test + rationale on Step 4 before Run |
+| 4 | Reconnect LLM dialogue to UI | Wire `StepDialogue.tsx` back to the SSE chat endpoint |
+| 5 | Confounder-adjusted tests | Use `CausalAnalyser` adjustment set in `run.py` |
+| 6 | S3 storage backend | Implement `web/backend/storage/s3.py` for cloud deployment |
+
+---
+
+*Last updated: 2026-06-09. v0.3: marked all implemented items; noted design deviations and gaps.
+v0.2: export format changed from PDF+Markdown to self-contained HTML (Jinja2 template, no system deps). v0.1: initial design.*
