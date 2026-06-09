@@ -148,8 +148,8 @@ Paste a CSV, type a hypothesis, name the outcome column (plus an optional group 
 predictor), and it profiles the variables, runs the **real BET dependence engine** over
 every numeric pair, and recommends a test via the §6.2 decision tree — with the
 dependence region drawn out. Click a sample link (stars / gene / overdose) to start.
-See [`playground/README.md`](playground/README.md). *(Group comparisons are recommended,
-not executed — that's the not-yet-built Step-6 executor.)*
+See [`playground/README.md`](playground/README.md). *(In this zero-dependency playground, group comparisons are recommended rather than
+executed; the full executor — scipy / statsmodels — runs in the `hta run` CLI and the web app.)*
 
 ## Running the full web app (FastAPI + React, stubbed pipeline)
 

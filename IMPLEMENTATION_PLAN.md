@@ -1,10 +1,21 @@
 # HTA Implementation Plan
 
-**Status:** Ready to implement  
+**Status:** Steps 2–8 built in consolidated form — see the status banner below  
 **Based on:** TECHNICAL_REPORT.md v0.1.0-dev (last updated 2026-06-01)  
 **Prerequisite complete:** Step 1 — models + tests (68 passing)
 
 Each step is gated: do not start Step N+1 until Step N tests pass and the gate check below it is satisfied.
+
+> **Implementation status (2026-06-08): the gated plan below has been built — but in
+> consolidated form, not module-by-module behind an event bus.** Steps 3/5/6/7 (profiler,
+> selector, executor, reporter) and Step 8 (`agent.py` + `cli.py`) now live in `src/hta/modules/`
+> and ship with passing tests (164 total, 90% coverage on `src/hta`; ruff + `mypy --strict`
+> clean). **Step 2 (event bus) was intentionally dropped** — the pipeline is a direct linear
+> call chain (TECHNICAL_REPORT §2, §10b #9). **Still outstanding:** Step 4 (`dialogue.py` /
+> `causal.py` — the design dialogue runs in the web layer today and confounders are surfaced as
+> caveats but not yet used to adjust the estimate), the survival/diagnostic executor branches,
+> post-hoc localisation (§6.3), and the Step-8 review deliverables. The per-step specs below
+> remain the design of record.
 
 ---
 

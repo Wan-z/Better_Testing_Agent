@@ -2,7 +2,7 @@
 
 **Version:** 0.1.0-dev  
 **Date:** 2026-04-29  
-**Status:** Step 1 of 8 complete  
+**Status:** Core pipeline implemented (profiler → selector → executor → reporter) with CLI + web; statistician review and the dialogue/causal stages pending  
 **Authors:** Development team + three statistician co-investigators (review pending)
 
 ---
@@ -54,7 +54,7 @@ These principles were established at project inception and apply to every line o
 | Principle | Rationale |
 |---|---|
 | **Shared data models as lingua franca** | Every module reads/writes the same Pydantic v2 models. No ad-hoc dicts passed between components. |
-| **Event bus decoupling** | Modules never import each other. All inter-module communication is via pub/sub events. This allows any module to be swapped or mocked independently. |
+| **Direct linear pipeline** | The pipeline is a strictly linear call chain (profile → design → select → execute → report) wired by `agent.py`. v0.1.0 deliberately omits the originally-planned synchronous event bus: the chain is linear, so a bus added indirection without the swappability the CLI/web callers actually use (see §10b #9). Modules exchange only the shared Pydantic models and do not import one another. |
 | **Deterministic test selection** | The statistical decision tree uses no LLM inference. Statisticians can read, audit, and revise it as plain Python logic. |
 | **Dry-run by default** | Any function that calls an external API accepts `dry_run: bool = True`. Tests never make real API calls. |
 | **Type annotations everywhere** | All public functions are fully typed. `mypy --strict` is run in CI. |
@@ -91,64 +91,53 @@ User input
 CLI output (Rich) / Python Report object
 ```
 
-### Event Flow
+### Pipeline stages
 
-All modules communicate via the **EventBus** (`bus.py`). The canonical events and their payloads are:
+In v0.1.0 `agent.py` wires the modules directly in a linear chain (the originally-planned
+event bus was dropped — see §2 and §10b #9). Each stage produces one shared Pydantic model
+that the next stage consumes:
 
-| Event constant | String name | Payload type | Published by |
-|---|---|---|---|
-| `EVENT_DATA_PROFILED` | `data.profiled` | `DataProfile` | `DataProfiler` |
-| `EVENT_DESIGN_CAPTURED` | `design.captured` | `StudyDesign` | `DesignDialogue` |
-| `EVENT_GRAPH_BUILT` | `causal.graph_built` | `CausalGraph` | `CausalAnalyser` |
-| `EVENT_TEST_SELECTED` | `test.selected` | `StatisticalTest` | `TestSelector` |
-| `EVENT_TEST_EXECUTED` | `test.executed` | `TestResult` | `TestExecutor` |
-| `EVENT_REPORT_READY` | `report.ready` | `Report` | `Reporter` |
+| Stage | Output model | Module |
+|---|---|---|
+| Profile (+ BET screen) | `DataProfile` | `modules/profiler.py` |
+| Study design | `StudyDesign` | `modules/dialogue.py` — *planned*; v0.1.0 uses a default design |
+| Causal graph | `CausalGraph` | `modules/causal.py` — *planned* (confounders captured, not yet adjusted) |
+| Select test | `StatisticalTest` (via `Selection`) | `modules/selector.py` |
+| Execute | `TestResult` | `modules/executor.py` |
+| Report | `Report` | `modules/reporter.py` |
 
 ### Repository Layout
 
 ```
-hypothesis-testing-agent/
-├── .env.example              # Template for environment variables
-├── .gitignore
+Better_Testing_Agent/
 ├── README.md
 ├── TECHNICAL_REPORT.md       # This document
-├── STATISTICIAN_REVIEW.md    # Decision points for expert validation (Step 8)
-├── BENCHMARK_CASES.md        # 20 test cases for evaluation (Step 8)
-├── pyproject.toml
+├── IMPLEMENTATION_PLAN.md
+├── pyproject.toml            # declares the `hta = hta.cli:app` console entry point
 ├── src/
 │   └── hta/
 │       ├── __init__.py
-│       ├── config.py         # Credentials + defaults       ← added ✅
-│       ├── models/           # Shared Pydantic data models  ← Step 1 ✅
-│       │   ├── data.py
-│       │   ├── design.py
-│       │   ├── test.py
-│       │   └── report.py
-│       ├── bus.py            # Event bus                    ← Step 2
+│       ├── config.py         # Credentials + defaults                            ✅
+│       ├── bet_screen.py     # BET pairwise nonlinear-dependence engine          ✅
+│       ├── models/           # Shared Pydantic models (data/design/test/report)  ✅
 │       ├── modules/
-│       │   ├── profiler.py   # Data ingestion & profiling   ← Step 3
-│       │   ├── dialogue.py   # Study design dialogue        ← Step 4
-│       │   ├── causal.py     # Causal graph & confounders   ← Step 4
-│       │   ├── selector.py   # Test selection logic         ← Step 5
-│       │   ├── executor.py   # Statistical test execution   ← Step 6
-│       │   └── reporter.py   # Report assembly              ← Step 7
-│       ├── agent.py          # Top-level orchestrator       ← Step 8
-│       └── cli.py            # CLI entry point              ← Step 8
-├── tests/
-│   ├── conftest.py           # Shared fixtures              ← Step 1 ✅
-│   ├── test_models.py        # Model tests (68 passing)     ← Step 1 ✅
-│   ├── test_bus.py                                          ← Step 2
-│   ├── test_profiler.py                                     ← Step 3
-│   ├── test_dialogue.py                                     ← Step 4
-│   ├── test_selector.py                                     ← Step 5
-│   ├── test_executor.py                                     ← Step 6
-│   ├── test_reporter.py                                     ← Step 7
-│   └── test_agent.py                                        ← Step 8
-└── examples/
-    ├── two_group_comparison.py                              ← Step 8
-    ├── categorical_association.py                           ← Step 8
-    └── paired_before_after.py                               ← Step 8
+│       │   ├── profiler.py   # Type inference + normality + BET → DataProfile    ✅
+│       │   ├── selector.py   # §6.2 decision tree → Selection                    ✅
+│       │   ├── executor.py   # Statistical test execution → TestResult           ✅
+│       │   ├── reporter.py   # Caveats + plot specs + text → Report              ✅
+│       │   ├── dialogue.py   # Study-design dialogue                       (planned)
+│       │   └── causal.py     # Causal graph / adjustment set               (planned)
+│       ├── agent.py          # Linear orchestrator — no event bus (§2)           ✅
+│       └── cli.py            # `hta run` (Typer + Rich)                          ✅
+├── tests/                    # test_{models,bet_screen,examples,playground}      ✅
+│                             #  + test_{profiler,selector,executor,reporter,agent,cli}  ✅
+├── playground/               # Zero-dependency demo; pipeline.py re-exports the engine
+├── examples/                 # Runnable BET analyses (stars, gene-pair, STAI-X)
+└── web/                      # FastAPI + React app; backend delegates to src/hta
 ```
+
+*Not yet created: `modules/dialogue.py`, `modules/causal.py`, and the Step-8 review
+deliverables `STATISTICIAN_REVIEW.md` / `BENCHMARK_CASES.md`.*
 
 ---
 
@@ -767,7 +756,7 @@ These constraints apply to every step without exception.
 | **Docstrings** | Every public function has a docstring explaining intent, not implementation |
 | **Dry-run parameter** | Any external API call accepts `dry_run: bool = True` |
 | **No hardcoded secrets** | Credentials loaded from `.env` at the project root via `src/hta/config.py`; `.env` is git-ignored and never committed |
-| **Module independence** | No direct imports between modules; only through models + event bus |
+| **Shared-model boundary** | Modules exchange only the shared Pydantic models; `agent.py` wires them in a linear chain (no event bus in v0.1.0) |
 | **Tests gate progress** | Step N+1 does not start until Step N tests pass |
 | **Coverage target** | ≥ 80% line coverage across `src/hta/` |
 | **Linting** | `ruff check src/` must pass with no errors |
@@ -818,7 +807,41 @@ Coverage: 100% on all model files (154 statements)
 
 ---
 
+### Steps 2–8 — Pipeline, CLI, and web integration ✅ (consolidated)
+
+**What was built:** the gated Step-2…8 plan was implemented as a single consolidated engine
+rather than module-by-module behind an event bus. `src/hta/modules/` now contains
+`profiler.py`, `selector.py`, `executor.py`, and `reporter.py` (each returning the shared
+Pydantic models); `agent.py` orchestrates them in a linear chain; and `cli.py` exposes
+`hta run`. The web backend and the zero-dependency playground both delegate to this engine.
+
+**Deltas from the original plan:**
+- **No event bus** (Step 2) — the linear pipeline is wired directly by `agent.py` (§2, §10b #9).
+- **Dialogue / causal stages not yet built** (Step 4). The design dialogue currently lives in
+  the web layer (`web/backend/api/dialogue.py`); `agent.py` uses a default observational
+  design, and confounders are surfaced as caveats but not yet used to adjust the estimate.
+- **Executor coverage:** the two-sample t-tests, Mann–Whitney, paired t / Wilcoxon, one-way and
+  Welch ANOVA, Kruskal–Wallis, χ²/Fisher/McNemar, Pearson/Spearman, the pure-Python MaxBET, and
+  Poisson / negative-binomial. Survival (log-rank/Cox), ROC/AUC, and the reserved regressions
+  are in the enum but return an UNTESTABLE result (not yet wired). MaxBET uses the pure-Python
+  `bet_screen` engine, not the rpy2 → R bridge originally specified.
+- **Sensitivity power** (§5.5) is computed for two-sample t-tests; post-hoc localisation (§6.3)
+  and the H1–H9 healthcare caveat catalog (§6.7) are not yet emitted by the reporter.
+
+**Test results:** 164 passing; **90% line coverage** on `src/hta`; `ruff check src/` and
+`mypy --strict src/hta` both clean. New suites: `test_{profiler,selector,executor,reporter,
+agent,cli}.py`, alongside the existing `test_{models,bet_screen,examples,playground}.py`.
+
+---
+
 ## 10. Planned Work
+
+> **Status (v0.1.0):** Steps 2–8 are implemented in consolidated form — see §9. The per-step
+> specifications below are retained as the design of record. The **event bus (Step 2)** was
+> intentionally dropped; the **dialogue/causal stages (Step 4)** and the Step-8 review
+> deliverables (`STATISTICIAN_REVIEW.md`, `BENCHMARK_CASES.md`) are the main outstanding items.
+> Read the step text below as the spec, not a live to-do list, except where §9 flags something
+> still pending.
 
 Steps are executed in order. Each step is blocked until the previous step's tests pass and are confirmed complete.
 
@@ -1054,4 +1077,4 @@ hta run --data data.csv --hypothesis "Group A < Group B" --group group --outcome
 
 ---
 
-*This document is updated at the end of each completed step. Last updated 2026-06-04: (1) reconciled the test-selector decision tree to the stated policy — Welch's t / Welch's ANOVA as unconditional defaults with no Levene pretest, normality as a graded NONE/MILD/STRONG signal, no formal normality test above N=2000 (§6.1–§6.4); (2) general data-form coverage specialized for healthcare — `VariableType` 4→9 (COUNT, TIME_TO_EVENT, DATETIME, GEOSPATIAL, IDENTIFIER), `StatisticalTest` 17→24 (Poisson/negative-binomial, log-rank/Cox, ROC-AUC selectable; mixed-model/GEE reserved), `StudyDesign.reporting_standard`, healthcare branches and caveat catalog (§6.5–§6.7); (3) BET pairwise nonlinear-dependence EDA screen as the profiler's discovery stage (§5.1a) with `DependenceForm`/`DependenceFinding` models, citing Xiang et al. (2023), Ann. Appl. Stat. 17(4), DOI 10.1214/23-AOAS1745; (4) synthetic NC overdose/clinic-access demo dataset and clinic-density heatmap renderer. Earlier 2026-06-01: BET/MaxBET/BEAST integration and §4.3 enum count 14→17. Earlier 2026-05-29: §10b Design Review Notes and Cramér's V fix.*
+*This document is updated at the end of each completed step. Last updated 2026-06-08: implemented the Step-2…8 pipeline as a consolidated, bus-free engine in `src/hta/modules/` (profiler / selector / executor / reporter) with `agent.py` orchestrator and `cli.py` (`hta run`); the web backend and the zero-dependency playground now delegate to this single engine; added engine test suites (164 tests, 90% coverage on `src/hta`; `ruff check src/` and `mypy --strict src/hta` clean); §2/§3/§8–§10 updated to drop the event bus and reflect the built pipeline. Earlier 2026-06-04: (1) reconciled the test-selector decision tree to the stated policy — Welch's t / Welch's ANOVA as unconditional defaults with no Levene pretest, normality as a graded NONE/MILD/STRONG signal, no formal normality test above N=2000 (§6.1–§6.4); (2) general data-form coverage specialized for healthcare — `VariableType` 4→9 (COUNT, TIME_TO_EVENT, DATETIME, GEOSPATIAL, IDENTIFIER), `StatisticalTest` 17→24 (Poisson/negative-binomial, log-rank/Cox, ROC-AUC selectable; mixed-model/GEE reserved), `StudyDesign.reporting_standard`, healthcare branches and caveat catalog (§6.5–§6.7); (3) BET pairwise nonlinear-dependence EDA screen as the profiler's discovery stage (§5.1a) with `DependenceForm`/`DependenceFinding` models, citing Xiang et al. (2023), Ann. Appl. Stat. 17(4), DOI 10.1214/23-AOAS1745; (4) synthetic NC overdose/clinic-access demo dataset and clinic-density heatmap renderer. Earlier 2026-06-01: BET/MaxBET/BEAST integration and §4.3 enum count 14→17. Earlier 2026-05-29: §10b Design Review Notes and Cramér's V fix.*
