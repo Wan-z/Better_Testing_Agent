@@ -9,6 +9,7 @@ UNTESTABLE result, and an unknown test name must raise.
 from __future__ import annotations
 
 import math
+import random
 
 import pandas as pd
 import pytest
@@ -268,3 +269,53 @@ def test_adjusted_ancova_note() -> None:
 def test_no_adjustment_without_confounders() -> None:
     res = execute("WELCH_T", _two_groups(), "score", "arm", None)
     assert not any("Adjusted for" in n for n in res.notes)
+
+
+# ── Phase 4: survival (§6.5b) and diagnostic accuracy (§6.5c) ─────────────────
+
+def _survival_df() -> pd.DataFrame:
+    rng = random.Random(0)
+    rows = []
+    for arm, scale in (("control", 9.0), ("treated", 20.0)):
+        for _ in range(40):
+            rows.append({"survival_time": round(rng.expovariate(1 / scale), 3),
+                         "status": 1 if rng.random() < 0.85 else 0, "arm": arm})
+    return pd.DataFrame(rows)
+
+
+def test_log_rank() -> None:
+    res = execute("LOG_RANK", _survival_df(), "survival_time", "arm", None)
+    assert res.test_used == StatisticalTest.LOG_RANK
+    assert res.effect_size.measure_name == "hazard ratio"
+    assert 0.0 <= res.p_value <= 1.0
+    assert any("Hazard ratio" in n or "Median survival" in n for n in res.notes)
+
+
+def test_log_rank_without_event_column_is_untestable() -> None:
+    df = _survival_df().drop(columns=["status"])
+    res = execute("LOG_RANK", df, "survival_time", "arm", None)
+    assert any(c.status.value == "UNTESTABLE" for c in res.assumption_checks)
+
+
+def test_cox_regression_with_ph_check() -> None:
+    rng = random.Random(1)
+    rows = []
+    for _ in range(90):
+        age = rng.uniform(40, 80)
+        rows.append({"fu_time": round(rng.expovariate(1 / max(2.0, 30 - 0.25 * (age - 40))), 3),
+                     "death": 1 if rng.random() < 0.8 else 0, "age": round(age, 1)})
+    res = execute("COX_REGRESSION", pd.DataFrame(rows), "fu_time", None, "age")
+    assert res.test_used == StatisticalTest.COX_REGRESSION
+    assert res.effect_size.measure_name == "hazard ratio"
+    assert any(c.assumption_name == "Proportional hazards" for c in res.assumption_checks)
+
+
+def test_roc_auc() -> None:
+    rng = random.Random(2)
+    rows = [{"disease": 1 if i < 50 else 0,
+             "biomarker": round(rng.gauss(1.5 if i < 50 else 0.0, 1.0), 3)} for i in range(100)]
+    res = execute("ROC_AUC", pd.DataFrame(rows), "disease", None, "biomarker")
+    assert res.test_used == StatisticalTest.ROC_AUC
+    assert res.effect_size.measure_name == "AUC"
+    assert 0.6 < res.effect_size.value <= 1.0   # the biomarker discriminates disease
+    assert any("sensitivity" in n for n in res.notes)

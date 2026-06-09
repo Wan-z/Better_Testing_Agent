@@ -81,3 +81,11 @@ def test_too_few_numeric_columns_no_screen() -> None:
     df = pd.DataFrame({"v": [float(i) for i in range(20)], "arm": ["A", "B"] * 10})
     profile = build_data_profile(df, "v", "arm")
     assert profile.nonlinear_dependencies == []
+
+
+def test_time_to_event_detection() -> None:
+    tte = profile_column("survival_time", [f"{1.0 + i * 0.7:.2f}" for i in range(30)])
+    assert tte.var_type == "TIME_TO_EVENT"
+    # A continuous column whose name is not duration-like stays CONTINUOUS.
+    bp = profile_column("bp", [f"{120 + i * 0.5:.1f}" for i in range(30)])
+    assert bp.var_type == "CONTINUOUS"

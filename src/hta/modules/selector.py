@@ -17,7 +17,7 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
 from hta.bet_screen import maxbet, relationship_form
-from hta.modules.profiler import _MISSING, _moments, _to_float, severity
+from hta.modules.profiler import _MISSING, EVENT_NAME_RE, _moments, _to_float, severity
 
 if TYPE_CHECKING:
     from hta.modules.profiler import Column
@@ -31,6 +31,17 @@ def prefer_rank_based(outcome_type: str, n_min: int, nonnormality: str | None) -
     if n_min >= LARGE_N:
         return False
     return nonnormality == "STRONG"
+
+
+def _find_event_col(cols: dict[str, "Column"], exclude: set[str]) -> str | None:
+    """A 0/1 event-/censoring-indicator column (the companion a survival analysis needs)."""
+    for name, col in cols.items():
+        if name in exclude or col.var_type != "BINARY":
+            continue
+        cats = {c.replace(".0", "") for c in col.categories}
+        if EVENT_NAME_RE.search(name) and cats <= {"0", "1"}:
+            return name
+    return None
 
 
 _WITHIN_RE = re.compile(r"\b(pair|paired|before|after|repeated|within|pre[- ]?post|matched)\b",
@@ -96,6 +107,22 @@ def select(
         return Selection("POISSON_REGRESSION",
                          f"Count outcome, variance ≈ mean ({var:.1f} vs {mean:.1f}).")
 
+    # Survival dispatch: a time-to-event outcome + a 0/1 event indicator → log-rank / Cox.
+    if oc.var_type == "TIME_TO_EVENT":
+        event = _find_event_col(cols, {outcome, group or "", predictor or ""})
+        if event:
+            if predictor and predictor in cols:
+                return Selection("COX_REGRESSION",
+                                 f"Time-to-event outcome with covariate {predictor} → Cox "
+                                 f"proportional hazards (HR); event indicator '{event}'.")
+            if group and group in cols:
+                return Selection("LOG_RANK",
+                                 f"Time-to-event outcome compared across {group} → log-rank "
+                                 f"with Kaplan–Meier curves; event indicator '{event}'.")
+            return Selection("LOG_RANK",
+                             f"Time-to-event outcome → Kaplan–Meier / log-rank (event '{event}').")
+        # No event indicator found → fall back to treating the duration as a continuous outcome.
+
     # ── grouped comparison ────────────────────────────────────────────────────
     if group and group in cols:
         sizes = _group_sizes(raw[group], [True] * len(raw[group]))
@@ -107,7 +134,7 @@ def select(
         n_groups = len(sizes)
         n_min = min(sizes) if sizes else 0
 
-        if oc.var_type in ("CONTINUOUS", "ORDINAL"):
+        if oc.var_type in ("CONTINUOUS", "ORDINAL", "TIME_TO_EVENT"):
             # Per-group (not pooled) normality severity — a pooled bimodal column would
             # look non-normal precisely when the groups differ, which is the wrong signal.
             grp_nonnorm = _group_severity(raw[outcome], raw[group])
@@ -135,10 +162,18 @@ def select(
         return sel
 
     # ── association of two continuous/ordinal variables → BET path ────────────
-    if predictor and predictor in cols and oc.var_type in ("CONTINUOUS", "ORDINAL"):
+    if (predictor and predictor in cols
+            and oc.var_type in ("CONTINUOUS", "ORDINAL", "TIME_TO_EVENT")):
         pc = cols[predictor]
         if pc.var_type in ("CONTINUOUS", "ORDINAL", "COUNT"):
             return _association(oc, raw[outcome], raw[predictor])
+
+    # Diagnostic accuracy: a binary reference standard discriminated by a continuous index.
+    if (oc.var_type == "BINARY" and predictor and predictor in cols
+            and cols[predictor].var_type in ("CONTINUOUS", "ORDINAL", "COUNT")):
+        return Selection("ROC_AUC",
+                         f"Binary outcome discriminated by the continuous index {predictor} "
+                         "→ ROC / AUC.")
 
     if oc.var_type in ("BINARY", "CATEGORICAL"):
         return Selection("CHI_SQUARED",

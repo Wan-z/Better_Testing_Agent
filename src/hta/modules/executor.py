@@ -22,6 +22,7 @@ from scipy import stats
 
 from hta.models.test import StatisticalTest, TestResult
 from hta.modules.causal import usable_adjustment_covariates
+from hta.modules.profiler import EVENT_NAME_RE
 
 N_BOOTSTRAP = 1000
 BOOTSTRAP_SEED = 42
@@ -800,6 +801,172 @@ def _glm_count(df: pd.DataFrame, outcome: str, regressor: Optional[str],
                    [f"IRR = exp(β) for {regressor}; CI back-transformed from the log scale."])
 
 
+# ── survival (§6.5b) and diagnostic accuracy (§6.5c) ─────────────────────────
+
+def _find_event_column(df: pd.DataFrame, exclude: set[str]) -> Optional[str]:
+    """A 0/1 event-/censoring-indicator column (the companion a survival analysis needs)."""
+    for col in df.columns:
+        if col in exclude or not EVENT_NAME_RE.search(str(col)):
+            continue
+        vals = pd.to_numeric(df[col], errors="coerce").dropna()
+        uniq = {float(v) for v in vals.unique().tolist()}
+        if uniq and uniq <= {0.0, 1.0}:
+            return str(col)
+    return None
+
+
+def _survival_frame(df: pd.DataFrame, outcome: str, event_col: str,
+                    extra: list[str]) -> pd.DataFrame:
+    sub = df[[outcome, event_col, *extra]].copy()
+    sub[outcome] = pd.to_numeric(sub[outcome], errors="coerce")
+    sub[event_col] = pd.to_numeric(sub[event_col], errors="coerce")
+    return sub[sub[outcome] >= 0].dropna(subset=[outcome, event_col])
+
+
+def _km_medians(sub: pd.DataFrame, outcome: str, event_col: str, group: str,
+                labels: list[str]) -> list[str]:
+    from lifelines import KaplanMeierFitter
+    out: list[str] = []
+    for lab in labels:
+        g = sub[sub[group].astype(str) == lab]
+        try:
+            m = KaplanMeierFitter().fit(g[outcome], g[event_col]).median_survival_time_
+            out.append(f"{lab}={float(m):.2f}")
+        except Exception:
+            pass
+    return out
+
+
+def _logrank(df: pd.DataFrame, outcome: str, group: str, event_col: str) -> dict[str, Any]:
+    from lifelines import CoxPHFitter
+    from lifelines.statistics import logrank_test, multivariate_logrank_test
+    sub = _survival_frame(df, outcome, event_col, [group]).dropna(subset=[group])
+    labels = sorted(str(x) for x in sub[group].unique())
+    if len(labels) < 2:
+        return _not_implemented("LOG_RANK")
+    checks = [
+        _check("Non-informative censoring", "UNTESTABLE",
+               "Censoring is assumed unrelated to prognosis; verify dropout is non-informative."),
+        _check("Proportional hazards", "UNTESTABLE",
+               "A single HR assumes proportional hazards; inspect the KM curves for crossing."),
+    ]
+    medians = _km_medians(sub, outcome, event_col, group, labels)
+    notes = [f"Median survival per group: {', '.join(medians)}." if medians
+             else "Median survival not reached in some groups.",
+             "Kaplan–Meier + log-rank; censoring assumed non-informative."]
+    if len(labels) == 2:
+        a = sub[sub[group].astype(str) == labels[0]]
+        b = sub[sub[group].astype(str) == labels[1]]
+        lr = logrank_test(a[outcome], b[outcome], a[event_col], b[event_col])
+        d = sub.assign(_g=(sub[group].astype(str) == labels[1]).astype(int))
+        try:
+            row = CoxPHFitter().fit(d[[outcome, event_col, "_g"]], duration_col=outcome,
+                                    event_col=event_col).summary.loc["_g"]
+            hr = float(row["exp(coef)"])
+            hr_lo, hr_hi = float(row["exp(coef) lower 95%"]), float(row["exp(coef) upper 95%"])
+        except Exception:
+            hr = hr_lo = hr_hi = float("nan")
+        notes.insert(0, f"Hazard ratio ({labels[1]} vs {labels[0]}) = {_finite(hr, 1.0):.3f}.")
+        return _result("LOG_RANK", float(lr.test_statistic), float(lr.p_value), None,
+                       "hazard ratio", _finite(hr, 1.0), "r", _finite(hr_lo, hr),
+                       _finite(hr_hi, hr), checks, (_finite(hr_lo, hr), _finite(hr_hi, hr)), notes)
+    mlr = multivariate_logrank_test(sub[outcome], sub[group], sub[event_col])
+    notes.insert(0, f"{len(labels)}-group omnibus log-rank (no single hazard ratio).")
+    return _result("LOG_RANK", float(mlr.test_statistic), float(mlr.p_value),
+                   float(len(labels) - 1), "hazard ratio", 1.0, "r", 1.0, 1.0, checks,
+                   (1.0, 1.0), notes)
+
+
+def _cox(df: pd.DataFrame, outcome: str, covariate: str, event_col: str) -> dict[str, Any]:
+    from lifelines import CoxPHFitter
+    from lifelines.statistics import proportional_hazard_test
+    sub = _survival_frame(df, outcome, event_col, [covariate]).dropna(subset=[covariate])
+    numeric = pd.to_numeric(sub[covariate], errors="coerce")
+    if numeric.notna().all() and int(numeric.nunique()) > 1:
+        sub = sub.assign(_x=numeric)
+    else:
+        labels = sorted(str(x) for x in sub[covariate].unique())
+        if len(labels) < 2:
+            return _not_implemented("COX_REGRESSION")
+        sub = sub.assign(_x=(sub[covariate].astype(str) == labels[-1]).astype(int))
+    d = sub[[outcome, event_col, "_x"]]
+    try:
+        cph = CoxPHFitter().fit(d, duration_col=outcome, event_col=event_col)
+    except Exception:
+        return _not_implemented("COX_REGRESSION")
+    row = cph.summary.loc["_x"]
+    hr, p, z = float(row["exp(coef)"]), float(row["p"]), float(row["z"])
+    hr_lo, hr_hi = float(row["exp(coef) lower 95%"]), float(row["exp(coef) upper 95%"])
+    ph_status, ph_p, ph_note = "UNTESTABLE", None, "Proportional-hazards test unavailable."
+    try:
+        ph_p = float(min(proportional_hazard_test(cph, d).p_value))
+        ph_status = "VIOLATED" if ph_p < 0.05 else "MET"
+        ph_note = (f"Scaled Schoenfeld residual test p = {ph_p:.3f}. "
+                   + ("Non-proportional hazards — a single HR is misleading; consider "
+                      "time-varying effects or RMST." if ph_p < 0.05
+                      else "No evidence against proportional hazards."))
+    except Exception:
+        pass
+    checks = [_check("Proportional hazards", ph_status, ph_note, p_value=ph_p),
+              _check("Non-informative censoring", "UNTESTABLE",
+                     "Censoring assumed unrelated to prognosis.")]
+    return _result("COX_REGRESSION", z, p, None, "hazard ratio", hr, "r", hr_lo, hr_hi,
+                   checks, (hr_lo, hr_hi),
+                   [f"Hazard ratio = exp(β) for {covariate}; CI back-transformed from the "
+                    "log scale."])
+
+
+def _boot_auc(y: list[int], score: list[float]) -> tuple[float, float]:
+    from sklearn.metrics import roc_auc_score
+    rng = random.Random(BOOTSTRAP_SEED)
+    n = len(y)
+    out: list[float] = []
+    for _ in range(N_BOOTSTRAP):
+        idx = [rng.randrange(n) for _ in range(n)]
+        yy = [y[i] for i in idx]
+        if len(set(yy)) < 2:
+            continue
+        try:
+            out.append(float(roc_auc_score(yy, [score[i] for i in idx])))
+        except Exception:
+            pass
+    out.sort()
+    return (_pct(out, 0.025), _pct(out, 0.975)) if out else (float("nan"), float("nan"))
+
+
+def _roc_auc(df: pd.DataFrame, outcome: str, predictor: str) -> dict[str, Any]:
+    from sklearn.metrics import roc_auc_score, roc_curve
+    sub = df[[outcome, predictor]].copy()
+    sub[predictor] = pd.to_numeric(sub[predictor], errors="coerce")
+    sub = sub.dropna()
+    labels = sorted(str(x) for x in sub[outcome].unique())
+    if len(labels) != 2 or len(sub) < 5:
+        return _not_implemented("ROC_AUC")
+    pos = labels[-1]
+    y = [1 if str(v) == pos else 0 for v in sub[outcome].tolist()]
+    score = [float(v) for v in sub[predictor].tolist()]
+    try:
+        auc = float(roc_auc_score(y, score))
+    except Exception:
+        return _not_implemented("ROC_AUC")
+    fpr, tpr, _thr = roc_curve(y, score)
+    j = max(range(len(fpr)), key=lambda i: tpr[i] - fpr[i])
+    sens, spec = float(tpr[j]), float(1 - fpr[j])
+    pos_s = [s for s, yy in zip(score, y) if yy == 1]
+    neg_s = [s for s, yy in zip(score, y) if yy == 0]
+    p = float(stats.mannwhitneyu(pos_s, neg_s, alternative="two-sided").pvalue)
+    ci = _boot_auc(y, score)
+    checks = [_check("Binary reference standard", "MET",
+                     f"Discriminating '{pos}' from '{labels[0]}'."),
+              _check("Sample size", "MET" if len(sub) >= 20 else "MARGINAL", f"n = {len(sub)}.")]
+    notes = [f"AUC for {predictor} discriminating '{pos}' (Mann–Whitney equivalent p-value).",
+             f"Youden-optimal threshold: sensitivity = {sens:.2f}, specificity = {spec:.2f}.",
+             "95% CI via 1000-sample bootstrap (DeLong is the analytic alternative)."]
+    return _result("ROC_AUC", auc, p, None, "AUC", auc, "r",
+                   _finite(ci[0], auc), _finite(ci[1], auc), checks,
+                   (_finite(ci[0], auc), _finite(ci[1], auc)), notes)
+
+
 # ── confounder-adjusted estimate (§5.3) ──────────────────────────────────────
 
 def _adjusted_estimate(test_name: str, df: pd.DataFrame, outcome: str,
@@ -882,7 +1049,16 @@ def _dispatch(
         return _glm_count(df, outcome, predictor or group, neg_binom=False)
     if test_name == "NEGATIVE_BINOMIAL_REGRESSION":
         return _glm_count(df, outcome, predictor or group, neg_binom=True)
-    # In the enum but not wired into the live pipeline yet (survival/diagnostic/reserved).
+    if test_name == "LOG_RANK":
+        ev = _find_event_column(df, {outcome, group or "", predictor or ""})
+        return _logrank(df, outcome, group, ev) if (ev and group) else _not_implemented("LOG_RANK")
+    if test_name == "COX_REGRESSION":
+        ev = _find_event_column(df, {outcome, group or "", predictor or ""})
+        cov = predictor or group
+        return _cox(df, outcome, cov, ev) if (ev and cov) else _not_implemented("COX_REGRESSION")
+    if test_name == "ROC_AUC":
+        return _roc_auc(df, outcome, predictor) if predictor else _not_implemented("ROC_AUC")
+    # Reserved regressions / mixed models are in the enum but not selectable in v0.1.0.
     return _not_implemented(test_name)
 
 

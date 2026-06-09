@@ -143,3 +143,31 @@ def test_no_second_variable_continuous_is_unresolved() -> None:
 def test_no_second_variable_categorical_hint() -> None:
     raw = {"c": (["x"] * 10) + (["y"] * 10) + (["z"] * 10)}
     assert _select(raw, "c", None, None).test == "CHI_SQUARED"
+
+
+# ── survival + diagnostic routing (§6.5) ──────────────────────────────────────
+
+def test_survival_logrank_routing() -> None:
+    raw = {"survival_time": [f"{1.0 + i * 0.3:.2f}" for i in range(40)],
+           "status": [str(i % 2) for i in range(40)],
+           "arm": (["A"] * 20) + (["B"] * 20)}
+    assert _select(raw, "survival_time", "arm", None).test == "LOG_RANK"
+
+
+def test_survival_cox_routing() -> None:
+    raw = {"fu_time": [f"{1.0 + i * 0.3:.2f}" for i in range(40)],
+           "death": [str(i % 2) for i in range(40)],
+           "age": [f"{40 + i * 0.5:.1f}" for i in range(40)]}
+    assert _select(raw, "fu_time", None, "age").test == "COX_REGRESSION"
+
+
+def test_tte_without_event_falls_back_to_continuous() -> None:
+    raw = {"survival_time": [f"{1.0 + i * 0.3:.2f}" for i in range(40)],
+           "arm": (["A"] * 20) + (["B"] * 20)}
+    assert _select(raw, "survival_time", "arm", None).test in ("WELCH_T", "MANN_WHITNEY_U")
+
+
+def test_diagnostic_roc_routing() -> None:
+    raw = {"disease": [str(i % 2) for i in range(40)],
+           "biomarker": [f"{i * 0.5:.2f}" for i in range(40)]}
+    assert _select(raw, "disease", None, "biomarker").test == "ROC_AUC"

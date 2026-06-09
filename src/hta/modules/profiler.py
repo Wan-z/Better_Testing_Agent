@@ -29,6 +29,12 @@ if TYPE_CHECKING:
 
 _ID_RE = re.compile(r"(^id$|_id$|uuid|mrn|fips|geoid)", re.IGNORECASE)
 _COUNT_RE = re.compile(r"(count|n_|num_|visits|events|cases|deaths)", re.IGNORECASE)
+# A duration / time-to-event column name (paired with an event indicator → survival analysis).
+_TTE_RE = re.compile(r"(surviv|duration|follow.?up|time.?to|_tte|^tte$|^time$|_time$|_days$|"
+                     r"_months$|days.to|months.to)", re.IGNORECASE)
+# A right-censoring / event indicator column name (a 0/1 companion to a duration column).
+EVENT_NAME_RE = re.compile(r"(event|status|death|dead|died|censor|relapse|recur|progress|"
+                           r"observed)", re.IGNORECASE)
 _MISSING = {"", "na", "nan", "null", "none", "."}
 
 # Formal normality test is run only at or below this N (TECHNICAL_REPORT §6.1): above it a
@@ -110,7 +116,9 @@ def profile_column(name: str, raw: list[str]) -> Column:
             col.var_type = "BINARY"
             col.categories = [str(u) for u in sorted(set(vals))]
             return col
-        if ints and all(x >= 0 for x in vals) and (_COUNT_RE.search(name) and n_uniq > 10):
+        if all(x >= 0 for x in vals) and n_uniq > 8 and _TTE_RE.search(name):
+            col.var_type = "TIME_TO_EVENT"          # duration; survival needs an event companion
+        elif ints and all(x >= 0 for x in vals) and (_COUNT_RE.search(name) and n_uniq > 10):
             col.var_type = "COUNT"
         elif ints and n_uniq <= 10:
             col.var_type = "ORDINAL"
@@ -118,7 +126,7 @@ def profile_column(name: str, raw: list[str]) -> Column:
             col.var_type = "CONTINUOUS"
         mean, sd, sk, ku = _moments(vals)
         col.mean, col.sd, col.skew, col.kurtosis = mean, sd, sk, ku
-        if col.var_type in ("CONTINUOUS", "ORDINAL"):
+        if col.var_type in ("CONTINUOUS", "ORDINAL", "TIME_TO_EVENT"):
             col.nonnormality = severity(sk, ku)
         if sd == 0:
             col.notes.append("constant (zero variance)")
