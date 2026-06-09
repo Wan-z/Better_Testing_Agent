@@ -136,8 +136,8 @@ Better_Testing_Agent/
 └── web/                      # FastAPI + React app; backend delegates to src/hta
 ```
 
-*Not yet created: `modules/dialogue.py`, `modules/causal.py`, and the Step-8 review
-deliverables `STATISTICIAN_REVIEW.md` / `BENCHMARK_CASES.md`.*
+*Not yet created: `modules/dialogue.py` — the study-design dialogue currently runs in the
+web layer (`web/backend/api/dialogue.py`), not the orchestrator.*
 
 ---
 
@@ -832,8 +832,9 @@ Pydantic models); `agent.py` orchestrates them in a linear chain; and `cli.py` e
   Games–Howell / Tukey / Dunn, via pingouin + scikit-posthocs) are emitted; the χ²/Kruskal
   effect sizes now carry real bootstrap CIs and the R×C Fisher test uses a Freeman–Halton
   permutation. The reporter emits the deterministic **H1–H9 healthcare caveat catalog** (§6.7)
-  and sets the EQUATOR **`reporting_standard`** (§6.6 — CONSORT / STROBE / STARD). Still pending:
-  LLM-written methods/summary prose and the Step-8 review deliverables.
+  and sets the EQUATOR **`reporting_standard`** (§6.6 — CONSORT / STROBE / STARD). The Step-8
+  review deliverables (`STATISTICIAN_REVIEW.md`, `BENCHMARK_CASES.md`) are written. Still pending:
+  LLM-written methods/summary prose (the reporter text is templated).
 
 **Test results:** 203 passing; **90% line coverage** on `src/hta`; `ruff check src/` and
 `mypy --strict src/hta` both clean. New suites: `test_{profiler,selector,executor,reporter,
@@ -845,9 +846,11 @@ causal,agent,cli}.py`, alongside the existing `test_{models,bet_screen,examples,
 
 > **Status (v0.1.0):** Steps 2–8 are implemented in consolidated form — see §9. The per-step
 > specifications below are retained as the design of record. The **event bus (Step 2)** was
-> intentionally dropped; the **dialogue/causal stages (Step 4)** and the Step-8 review
-> deliverables (`STATISTICIAN_REVIEW.md`, `BENCHMARK_CASES.md`) are the main outstanding items.
-> Read the step text below as the spec, not a live to-do list, except where §9 flags something
+> intentionally dropped; the causal stage and the Step-8 review deliverables
+> (`STATISTICIAN_REVIEW.md`, `BENCHMARK_CASES.md`) are now built. The main outstanding items are
+> wiring the **dialogue stage (Step 4)** into the orchestrator (it runs in the web layer today)
+> and LLM-written report prose. Read the step text below as the spec, not a live to-do list,
+> except where §9 flags something
 > still pending.
 
 Steps are executed in order. Each step is blocked until the previous step's tests pass and are confirmed complete.
@@ -999,14 +1002,14 @@ These are open methodological questions raised during design review. They are fl
 
 The project is ready for statistician review when all boxes below are checked:
 
-- [ ] All 8 steps complete with passing tests
-- [ ] `pytest --cov=src/hta` shows ≥ 80% coverage
-- [ ] `mypy src/hta` passes with no errors
-- [ ] `ruff check src/` passes with no errors
-- [ ] All three example scripts run successfully in dry-run mode
-- [ ] `STATISTICIAN_REVIEW.md` documents every statistical decision
-- [ ] `BENCHMARK_CASES.md` contains 20 validated test cases
-- [ ] `README.md` is up to date
+- [x] Pipeline complete (consolidated form — see §9) with passing tests (203)
+- [x] `pytest --cov=src/hta` shows ≥ 80% coverage (90%)
+- [x] `mypy --strict src/hta` passes with no errors
+- [x] `ruff check src/` passes with no errors
+- [x] Example scripts run successfully (`examples/` BET demos + `benchmark_cases.py`)
+- [x] `STATISTICIAN_REVIEW.md` documents every statistical decision
+- [x] `BENCHMARK_CASES.md` contains 20 validated test cases
+- [ ] `README.md` fully reconciled (the rpy2 / LLM-provider sections still describe the original design)
 
 ---
 
@@ -1084,4 +1087,4 @@ hta run --data data.csv --hypothesis "Group A < Group B" --group group --outcome
 
 ---
 
-*This document is updated at the end of each completed step. Last updated 2026-06-09: (Phase 2) post-hoc localisation (Games–Howell / Tukey / Dunn via pingouin + scikit-posthocs), real bootstrap CIs for the χ²/Kruskal effect sizes, an R×C Fisher (Freeman–Halton) permutation test, and a true Welch ANOVA replacing the mislabelled Alexander–Govern; (Phase 3) the causal stage — `modules/causal.py` builds the adjustment set and the executor produces a confounder-adjusted estimate (partial correlation / ANCOVA), so elicited confounders now change the reported result; (Phase 4) survival (log-rank / Cox) and diagnostic ROC/AUC wired end-to-end through profiler TIME_TO_EVENT detection, selector routing, and executor implementations (lifelines, scikit-learn); the reporter now emits the deterministic H1–H9 healthcare caveat catalog (§6.7) and sets the EQUATOR reporting standard (§6.6). Earlier 2026-06-08: implemented the Step-2…8 pipeline as a consolidated, bus-free engine in `src/hta/modules/` (profiler / selector / executor / reporter) with `agent.py` orchestrator and `cli.py` (`hta run`); the web backend and the zero-dependency playground now delegate to this single engine; added engine test suites (164 tests, 90% coverage on `src/hta`; `ruff check src/` and `mypy --strict src/hta` clean); §2/§3/§8–§10 updated to drop the event bus and reflect the built pipeline. Earlier 2026-06-04: (1) reconciled the test-selector decision tree to the stated policy — Welch's t / Welch's ANOVA as unconditional defaults with no Levene pretest, normality as a graded NONE/MILD/STRONG signal, no formal normality test above N=2000 (§6.1–§6.4); (2) general data-form coverage specialized for healthcare — `VariableType` 4→9 (COUNT, TIME_TO_EVENT, DATETIME, GEOSPATIAL, IDENTIFIER), `StatisticalTest` 17→24 (Poisson/negative-binomial, log-rank/Cox, ROC-AUC selectable; mixed-model/GEE reserved), `StudyDesign.reporting_standard`, healthcare branches and caveat catalog (§6.5–§6.7); (3) BET pairwise nonlinear-dependence EDA screen as the profiler's discovery stage (§5.1a) with `DependenceForm`/`DependenceFinding` models, citing Xiang et al. (2023), Ann. Appl. Stat. 17(4), DOI 10.1214/23-AOAS1745; (4) synthetic NC overdose/clinic-access demo dataset and clinic-density heatmap renderer. Earlier 2026-06-01: BET/MaxBET/BEAST integration and §4.3 enum count 14→17. Earlier 2026-05-29: §10b Design Review Notes and Cramér's V fix.*
+*This document is updated at the end of each completed step. Last updated 2026-06-09: (Phase 2) post-hoc localisation (Games–Howell / Tukey / Dunn via pingouin + scikit-posthocs), real bootstrap CIs for the χ²/Kruskal effect sizes, an R×C Fisher (Freeman–Halton) permutation test, and a true Welch ANOVA replacing the mislabelled Alexander–Govern; (Phase 3) the causal stage — `modules/causal.py` builds the adjustment set and the executor produces a confounder-adjusted estimate (partial correlation / ANCOVA), so elicited confounders now change the reported result; (Phase 4) survival (log-rank / Cox) and diagnostic ROC/AUC wired end-to-end through profiler TIME_TO_EVENT detection, selector routing, and executor implementations (lifelines, scikit-learn); the reporter now emits the deterministic H1–H9 healthcare caveat catalog (§6.7) and sets the EQUATOR reporting standard (§6.6); added the Step-8 review deliverables `STATISTICIAN_REVIEW.md` (every decision point with file:line) and `BENCHMARK_CASES.md` (20 reproducible reference results from `examples/benchmark_cases.py`). Earlier 2026-06-08: implemented the Step-2…8 pipeline as a consolidated, bus-free engine in `src/hta/modules/` (profiler / selector / executor / reporter) with `agent.py` orchestrator and `cli.py` (`hta run`); the web backend and the zero-dependency playground now delegate to this single engine; added engine test suites (164 tests, 90% coverage on `src/hta`; `ruff check src/` and `mypy --strict src/hta` clean); §2/§3/§8–§10 updated to drop the event bus and reflect the built pipeline. Earlier 2026-06-04: (1) reconciled the test-selector decision tree to the stated policy — Welch's t / Welch's ANOVA as unconditional defaults with no Levene pretest, normality as a graded NONE/MILD/STRONG signal, no formal normality test above N=2000 (§6.1–§6.4); (2) general data-form coverage specialized for healthcare — `VariableType` 4→9 (COUNT, TIME_TO_EVENT, DATETIME, GEOSPATIAL, IDENTIFIER), `StatisticalTest` 17→24 (Poisson/negative-binomial, log-rank/Cox, ROC-AUC selectable; mixed-model/GEE reserved), `StudyDesign.reporting_standard`, healthcare branches and caveat catalog (§6.5–§6.7); (3) BET pairwise nonlinear-dependence EDA screen as the profiler's discovery stage (§5.1a) with `DependenceForm`/`DependenceFinding` models, citing Xiang et al. (2023), Ann. Appl. Stat. 17(4), DOI 10.1214/23-AOAS1745; (4) synthetic NC overdose/clinic-access demo dataset and clinic-density heatmap renderer. Earlier 2026-06-01: BET/MaxBET/BEAST integration and §4.3 enum count 14→17. Earlier 2026-05-29: §10b Design Review Notes and Cramér's V fix.*
