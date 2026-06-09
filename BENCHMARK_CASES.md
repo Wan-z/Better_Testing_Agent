@@ -23,13 +23,13 @@ generating script is [`examples/benchmark_cases.py`](examples/benchmark_cases.py
 | 8 | Monotone (curved) association | `SPEARMAN_CORRELATION` | 1.000 | <0.001 | Spearman's ρ = 1.000 (large) |
 | 9 | Parabolic (nonlinear-only) | `MAXBET` | 12.175 | <0.001 | BET symmetry = 0.963 (large) |
 | 10 | 2×2 contingency, large expected | `CHI_SQUARED` | 6.416 | 0.011 | Cramér's V = 0.401 (medium) |
-| 11 | 2×2 contingency, small expected | `FISHER_EXACT` | 0.111 | 0.486 | odds ratio = 0.111 |
+| 11 | 2×2 contingency, small expected | `FISHER_EXACT` | 0.111 | 0.486 | odds ratio = 0.111 (large) |
 | 12 | R×C, small expected (Freeman–Halton) | `FISHER_EXACT` | 18.000 | <0.001 | Cramér's V = 0.500 (large) |
-| 13 | Paired binary | `MCNEMAR` | 10.000 | 0.424 | OR (discordant) = 1.500 |
-| 14 | Count, low dispersion | `POISSON_REGRESSION` | 0.841 | 0.401 | IRR = 1.002 |
-| 15 | Count, overdispersed | `NEGATIVE_BINOMIAL_REGRESSION` | 0.712 | 0.476 | IRR = 1.018 |
-| 16 | Survival, two arms | `LOG_RANK` | 8.521 | 0.004 | hazard ratio = 0.444 |
-| 17 | Survival with covariate | `COX_REGRESSION` | 1.456 | 0.146 | hazard ratio = 1.017 |
+| 13 | Paired binary | `MCNEMAR` | 10.000 | 0.424 | OR (discordant) = 1.500 (small) |
+| 14 | Count, low dispersion | `POISSON_REGRESSION` | 0.841 | 0.401 | IRR = 1.002 (negligible) |
+| 15 | Count, overdispersed | `NEGATIVE_BINOMIAL_REGRESSION` | 0.712 | 0.476 | IRR = 1.018 (negligible) |
+| 16 | Survival, two arms | `LOG_RANK` | 8.521 | 0.004 | hazard ratio = 0.444 (large) |
+| 17 | Survival with covariate | `COX_REGRESSION` | 1.456 | 0.146 | hazard ratio = 1.017 (negligible) |
 | 18 | Diagnostic discrimination | `ROC_AUC` | 0.820 | <0.001 | AUC = 0.820 (large) |
 | 19 | Confounded association | `SPEARMAN_CORRELATION` | 0.993 | <0.001 | Spearman's ρ = 0.993 (large) |
 | 20 | Ecological (county-level) | `SPEARMAN_CORRELATION` | −0.987 | <0.001 | Spearman's ρ = −0.987 (large) |
@@ -55,10 +55,11 @@ These are produced on the same runs and are the point of several cases:
 - **#20 (ecological):** fires the H1–H3 caveats (ecological fallacy, MAUP, spatial
   autocorrelation) and sets `reporting_standard = STROBE`.
 
-## Known limitation for review
+## Ratio effect-size interpretation (fixed)
 
-For **ratio effect measures** (odds ratio, hazard ratio, incidence-rate ratio) the
-`interpretation` label is computed with correlation-calibrated thresholds, so a value near the
-null of 1.0 (e.g. #14, IRR = 1.002) can read as "large". The numeric estimate, CI, and p-value
-are correct; only the qualitative word is mis-scaled for ratios. A ratio-aware interpretation
-(distance from 1.0) is an open item — see `STATISTICIAN_REVIEW.md`.
+**Ratio measures** (odds ratio, hazard ratio, incidence-rate ratio) now use a dedicated
+`"ratio"` family that measures distance from the null on the **log scale** — symmetric for
+protective vs. harmful effects. Thresholds: negligible |log(ratio)| < 0.22, small < 0.41,
+medium < 0.69, large ≥ 0.69 (corresponding roughly to ratios in (0.80, 1.25), (0.67, 1.50),
+(0.50, 2.00), and < 0.50 or > 2.00 respectively). Cases #11, #13–#17 now label correctly;
+e.g. IRR = 1.002 is "negligible" and HR = 0.444 is "large".

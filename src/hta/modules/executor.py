@@ -35,6 +35,13 @@ _THRESH = {
     "eta2": (0.01, 0.06, 0.14),    # eta-squared
 }
 
+# |log(ratio)| thresholds for ratio effect measures (OR, HR, IRR).
+# Symmetric for protective/harmful effects. Correspond roughly to:
+#   small  → ratio in (0.80, 1.25]   ≤25 % departure from null
+#   medium → ratio in (0.67, 1.50]   ≤50 % departure
+#   large  → ratio < 0.50 or > 2.00  >100 % departure
+_RATIO_THRESH = (0.22, 0.41, 0.69)
+
 
 # ── small numeric helpers (stdlib) ────────────────────────────────────────────
 
@@ -54,7 +61,24 @@ def _sd(v: list[float]) -> float:
     return math.sqrt(_var(v))
 
 
+def _interpret_ratio(ratio: float) -> str:
+    """Interpret ratio effect measures (OR, HR, IRR) by |log(ratio)| distance from null."""
+    if ratio <= 0 or not math.isfinite(ratio):
+        return "negligible"
+    small, medium, large = _RATIO_THRESH
+    d = abs(math.log(ratio))
+    if d >= large:
+        return "large"
+    if d >= medium:
+        return "medium"
+    if d >= small:
+        return "small"
+    return "negligible"
+
+
 def _interpret(value: float, family: str) -> str:
+    if family == "ratio":
+        return _interpret_ratio(value)
     small, medium, large = _THRESH[family]
     a = abs(value)
     if a >= large:
@@ -647,7 +671,7 @@ def _fisher(df: pd.DataFrame, outcome: str, group: str) -> dict[str, Any]:
             _check("Small expected counts", "UNTESTABLE",
                    "Fisher's exact is valid for any expected counts."),
         ]
-        return _result("FISHER_EXACT", odds, p, None, "odds ratio", odds, "r",
+        return _result("FISHER_EXACT", odds, p, None, "odds ratio", odds, "ratio",
                        odds, odds, checks, (odds, odds),
                        ["Exact test for a 2×2 contingency table."])
     # R×C: Freeman–Halton simulated-exact p-value + Cramér's V (odds ratio is undefined).
@@ -686,7 +710,7 @@ def _mcnemar(df: pd.DataFrame, outcome: str, group: str) -> dict[str, Any]:
                      "MET" if (b_ + c_) >= 25 else "MARGINAL",
                      f"{int(b_ + c_)} discordant pairs.")]
     return _result("MCNEMAR", res.statistic, res.pvalue, None, "odds ratio (discordant)",
-                   _finite(odds, 1.0), "r", _finite(odds, 1.0), _finite(odds, 1.0),
+                   _finite(odds, 1.0), "ratio", _finite(odds, 1.0), _finite(odds, 1.0),
                    checks, (_finite(odds, 1.0), _finite(odds, 1.0)),
                    ["McNemar's test for paired binary data."])
 
@@ -796,7 +820,7 @@ def _glm_count(df: pd.DataFrame, outcome: str, regressor: Optional[str],
                      "MET" if neg_binom else "MARGINAL",
                      "Negative-binomial relaxes the variance = mean assumption." if neg_binom
                      else "Verify variance ≈ mean; prefer negative binomial if overdispersed.")]
-    return _result(name, stat, p, None, "incidence-rate ratio", irr, "r",
+    return _result(name, stat, p, None, "incidence-rate ratio", irr, "ratio",
                    irr_lo, irr_hi, checks, (irr_lo, irr_hi),
                    [f"IRR = exp(β) for {regressor}; CI back-transformed from the log scale."])
 
@@ -868,12 +892,12 @@ def _logrank(df: pd.DataFrame, outcome: str, group: str, event_col: str) -> dict
             hr = hr_lo = hr_hi = float("nan")
         notes.insert(0, f"Hazard ratio ({labels[1]} vs {labels[0]}) = {_finite(hr, 1.0):.3f}.")
         return _result("LOG_RANK", float(lr.test_statistic), float(lr.p_value), None,
-                       "hazard ratio", _finite(hr, 1.0), "r", _finite(hr_lo, hr),
+                       "hazard ratio", _finite(hr, 1.0), "ratio", _finite(hr_lo, hr),
                        _finite(hr_hi, hr), checks, (_finite(hr_lo, hr), _finite(hr_hi, hr)), notes)
     mlr = multivariate_logrank_test(sub[outcome], sub[group], sub[event_col])
     notes.insert(0, f"{len(labels)}-group omnibus log-rank (no single hazard ratio).")
     return _result("LOG_RANK", float(mlr.test_statistic), float(mlr.p_value),
-                   float(len(labels) - 1), "hazard ratio", 1.0, "r", 1.0, 1.0, checks,
+                   float(len(labels) - 1), "hazard ratio", 1.0, "ratio", 1.0, 1.0, checks,
                    (1.0, 1.0), notes)
 
 
@@ -910,7 +934,7 @@ def _cox(df: pd.DataFrame, outcome: str, covariate: str, event_col: str) -> dict
     checks = [_check("Proportional hazards", ph_status, ph_note, p_value=ph_p),
               _check("Non-informative censoring", "UNTESTABLE",
                      "Censoring assumed unrelated to prognosis.")]
-    return _result("COX_REGRESSION", z, p, None, "hazard ratio", hr, "r", hr_lo, hr_hi,
+    return _result("COX_REGRESSION", z, p, None, "hazard ratio", hr, "ratio", hr_lo, hr_hi,
                    checks, (hr_lo, hr_hi),
                    [f"Hazard ratio = exp(β) for {covariate}; CI back-transformed from the "
                     "log scale."])

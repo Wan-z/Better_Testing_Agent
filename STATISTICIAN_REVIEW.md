@@ -79,9 +79,11 @@ Bootstrap CIs use stdlib `random` (seed 42, n = 1000) so they are deterministic.
 
 ## 6. Open items / known limitations for the reviewer
 
-1. **Ratio-measure interpretation.** OR/HR/IRR use the correlation-calibrated small/medium/large
-   thresholds, so a value near 1.0 can read as "large" (e.g. `BENCHMARK_CASES.md` #14). Estimate,
-   CI, and p are correct; the qualitative word needs a ratio-aware (distance-from-1) scale.
+1. **Ratio-measure interpretation.** ✅ Fixed. OR/HR/IRR now use a `"ratio"` family that
+   measures |log(ratio)| distance from the null — symmetric for protective/harmful effects.
+   Thresholds: negligible < 0.22, small < 0.41, medium < 0.69, large ≥ 0.69 (ratios roughly
+   <0.80/>1.25, <0.67/>1.50, <0.50/>2.00). `BENCHMARK_CASES.md` #11, #13–#17 updated.
+   Pending Statistician A sign-off on the specific threshold values.
 2. **Pending defaults.** `LARGE_N = 30` and the NONE/MILD/STRONG skew/kurtosis cut-points are
    proposed and await Statistician A sign-off.
 3. **BET.** MaxBET uses the pure-Python depth-2 / two-stage engine ([`bet_screen.py`](src/hta/bet_screen.py)),
