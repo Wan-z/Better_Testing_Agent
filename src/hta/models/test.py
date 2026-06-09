@@ -38,7 +38,7 @@ class StatisticalTest(str, Enum):
     LINEAR_REGRESSION = "LINEAR_REGRESSION"
     LOGISTIC_REGRESSION = "LOGISTIC_REGRESSION"
     LINEAR_MIXED_MODEL = "LINEAR_MIXED_MODEL"  # clustered/longitudinal (subject-level); v0.2.0
-    GENERALIZED_ESTIMATING_EQUATIONS = "GENERALIZED_ESTIMATING_EQUATIONS"  # clustered marginal; v0.2.0
+    GENERALIZED_ESTIMATING_EQUATIONS = "GENERALIZED_ESTIMATING_EQUATIONS"  # marginal; v0.2.0
 
 
 class AssumptionStatus(str, Enum):

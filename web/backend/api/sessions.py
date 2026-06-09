@@ -25,9 +25,6 @@ for _p in (str(_ROOT / "src"), str(_ROOT)):
 router = APIRouter()
 store = LocalStorage()
 
-
-_NUMERIC_TYPES = ("CONTINUOUS", "ORDINAL", "COUNT")
-
 # Upper bound on pairs screened by the BET EDA (the p-values are Bonferroni-corrected
 # across them). High enough to fully cover wide dependence-screen datasets — e.g. 100
 # columns → 4 950 pairs — while still bounding pathological widths.
@@ -37,13 +34,6 @@ _MAX_SCREEN_PAIRS = 5000
 # pairs are always kept; this only bounds the strongest non-significant extras so the
 # stored/transferred profile stays small (a 100-column screen has ~5 000 findings).
 _MAX_REPORTED_FINDINGS = 50
-
-
-def _is_unnamed_index(name: object) -> bool:
-    """True for a pandas auto-named blank-header column (a CSV row index). Such a column
-    is an artefact, not a variable, so it must be kept out of the pairwise screen."""
-    s = str(name).strip()
-    return s == "" or s.startswith("Unnamed:")
 
 
 def _infer_types(df: pd.DataFrame) -> dict[str, str]:
@@ -228,117 +218,22 @@ def _eda_plots_and_summary(
 
 
 def _build_profile(df: pd.DataFrame, outcome: str | None, group: str | None) -> dict[str, Any]:
-    """Build a DataProfile dict: engine type inference + scipy normality + the BET
-    pairwise nonlinear-dependence screen (DataProfile.nonlinear_dependencies)."""
-    from scipy import stats as scipy_stats
+    """Build a DataProfile dict via the canonical engine profiler (type inference + scipy
+    normality + the BET pairwise nonlinear-dependence screen), then attach the web's
+    Xiang-style EDA plots from the *same* screen context (so the screen runs only once)."""
+    from hta.modules.profiler import profile_with_screen
 
-    from hta.bet_screen import pairwise_screen
-    from playground.pipeline import profile_column
+    profile_model, ctx = profile_with_screen(
+        df, outcome, group,
+        max_screen_pairs=_MAX_SCREEN_PAIRS, max_reported_findings=_MAX_REPORTED_FINDINGS)
+    profile = profile_model.model_dump(mode="json")
 
-    cols = {col: profile_column(col, df[col].astype(str).tolist()) for col in df.columns}
-    variables = []
-
-    for col in df.columns:
-        vtype = cols[col].var_type
-        n_obs = int(df[col].notna().sum())
-        n_miss = int(df[col].isna().sum())
-        var: dict[str, Any] = {
-            "name": col,
-            "variable_type": vtype,
-            "n_observations": n_obs,
-            "n_missing": n_miss,
-        }
-
-        if vtype in _NUMERIC_TYPES and pd.api.types.is_numeric_dtype(df[col]):
-            series = df[col].dropna().astype(float)
-            var["distribution_stats"] = {
-                "mean": round(float(series.mean()), 4),
-                "std": round(float(series.std()), 4),
-                "median": round(float(series.median()), 4),
-                "iqr": round(float(series.quantile(0.75) - series.quantile(0.25)), 4),
-                "skewness": round(float(series.skew()), 4),
-                "kurtosis": round(float(series.kurtosis()), 4),
-                "min": round(float(series.min()), 4),
-                "max": round(float(series.max()), 4),
-            }
-            if vtype in ("CONTINUOUS", "ORDINAL") and len(series) >= 3:
-                if len(series) <= 2000:
-                    stat, p = scipy_stats.shapiro(series)
-                    var["normality"] = {
-                        "name": "Shapiro-Wilk",
-                        "statistic": round(float(stat), 4),
-                        "p_value": round(float(p), 4),
-                        "is_normal": float(p) > 0.05,
-                    }
-                else:
-                    result = scipy_stats.anderson(series, dist="norm")
-                    cv_5pct = float(result.critical_values[2])
-                    stat = float(result.statistic)
-                    var["normality"] = {
-                        "name": "Anderson-Darling",
-                        "statistic": round(stat, 4),
-                        "p_value": None,
-                        "is_normal": stat < cv_5pct,
-                    }
-        elif vtype in ("BINARY", "CATEGORICAL"):
-            var["unique_values"] = [str(v) for v in df[col].dropna().unique().tolist()][:20]
-
-        variables.append(var)
-
-    # BET pairwise nonlinear-dependence screen over the numeric columns (EDA stage).
-    numeric_names = [c for c in df.columns
-                     if cols[c].var_type in _NUMERIC_TYPES and not _is_unnamed_index(c)]
-    nonlinear: list[dict[str, Any]] = []
-    eda_plots: list[dict[str, Any]] = []
-    eda_summary: dict[str, Any] | None = None
-    bet_note = None
-    if len(numeric_names) >= 2:
-        aligned = df[numeric_names].apply(pd.to_numeric, errors="coerce").dropna()
-        if len(aligned) >= 8:
-            numeric_columns = {c: [float(v) for v in aligned[c].tolist()] for c in numeric_names}
-            screen = pairwise_screen(numeric_columns, max_pairs=_MAX_SCREEN_PAIRS, seed=0)
-            eda_plots, eda_summary = _eda_plots_and_summary(
-                df, cols, aligned, numeric_columns, screen, group)
-            # Keep all significant pairs plus the strongest remaining ones (findings are
-            # already sorted by BET strength) so the profile payload stays small.
-            sig_findings = [f for f in screen.findings if f.significant]
-            extra = [f for f in screen.findings if not f.significant]
-            reported = sig_findings + extra[: max(0, _MAX_REPORTED_FINDINGS - len(sig_findings))]
-            for f in reported:
-                nonlinear.append({
-                    "x": f.x, "y": f.y, "n": f.n,
-                    "bet_statistic_s": f.bet_statistic_s,
-                    "bet_z": round(f.bet_z, 4), "p_value": f.p_value, "bid": f.bid,
-                    "form": f.form, "direction": f.direction,
-                    "pearson_r": round(f.pearson_r, 4),
-                    "spearman_rho": round(f.spearman_rho, 4),
-                    "nonlinear_only": f.nonlinear_only, "significant": f.significant,
-                })
-            n_sig = sum(1 for f in nonlinear if f["significant"])
-            n_nl = sum(1 for f in nonlinear if f["nonlinear_only"])
-            if n_sig:
-                nl_phrase = f", {n_nl} nonlinear-only" if n_nl else ""
-                bet_note = (f"BET screen: {n_sig} dependent pair(s) found{nl_phrase} "
-                            f"across {len(numeric_names)} numeric columns.")
-
-    notes = []
-    for col in df.columns:
-        pct_miss = df[col].isna().mean() * 100
-        if pct_miss > 5:
-            notes.append(f"{col}: {pct_miss:.1f}% missing values")
-    if bet_note:
-        notes.append(bet_note)
-
-    return {
-        "variables": variables,
-        "n_groups": int(df[group].nunique()) if group and group in df.columns else None,
-        "group_variable": group,
-        "outcome_variable": outcome,
-        "notes": notes,
-        "nonlinear_dependencies": nonlinear,
-        "eda_plots": eda_plots,
-        "eda_summary": eda_summary,
-    }
+    if ctx is not None:
+        eda_plots, eda_summary = _eda_plots_and_summary(
+            df, ctx.cols, ctx.aligned, ctx.numeric_columns, ctx.screen, group)
+        profile["eda_plots"] = eda_plots
+        profile["eda_summary"] = eda_summary
+    return profile
 
 
 @router.post("/sessions", response_model=UploadResponse)

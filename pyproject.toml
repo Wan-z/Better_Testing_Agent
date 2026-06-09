@@ -54,6 +54,12 @@ select = ["E", "F", "I", "N", "W"]
 strict = true
 python_version = "3.11"
 
+# Third-party scientific libraries ship without type stubs (or a py.typed marker); under
+# --strict their imports would otherwise fail with import-untyped. dotenv is the same.
+[[tool.mypy.overrides]]
+module = ["pandas.*", "scipy.*", "statsmodels.*", "dotenv.*", "pingouin.*"]
+ignore_missing_imports = true
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "--cov=src/hta --cov-report=term-missing"

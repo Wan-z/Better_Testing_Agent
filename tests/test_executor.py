@@ -1,0 +1,182 @@
+"""Tests for the engine executor (`hta.modules.executor`).
+
+Each selectable test must return a validated `TestResult` with the right `test_used`, a
+p-value in range, and a populated effect size. Two cases cross-check the wiring against a
+direct scipy computation; the survival/diagnostic/reserved tests must degrade to an
+UNTESTABLE result, and an unknown test name must raise.
+"""
+
+from __future__ import annotations
+
+import math
+
+import pandas as pd
+import pytest
+from scipy import stats
+
+from hta.models.test import StatisticalTest, TestResult
+from hta.modules.executor import execute
+
+
+def _two_groups() -> pd.DataFrame:
+    a = [10.2, 11.4, 9.1, 12.3, 10.8, 11.0, 13.1, 9.6, 10.5, 12.0, 10.1, 11.7]
+    b = [20.2, 21.4, 19.1, 22.3, 20.8, 21.0, 23.1, 19.6, 20.5, 22.0, 20.3, 21.6]
+    return pd.DataFrame({"arm": ["A"] * len(a) + ["B"] * len(b), "score": a + b})
+
+
+def _three_groups() -> pd.DataFrame:
+    rows = []
+    for label, base in (("A", 10.0), ("B", 14.0), ("C", 18.0)):
+        for i in range(10):
+            rows.append({"arm": label, "score": base + (i % 5) * 0.7})
+    return pd.DataFrame(rows)
+
+
+def test_welch_t_matches_scipy() -> None:
+    df = _two_groups()
+    a = df[df.arm == "A"].score.tolist()
+    b = df[df.arm == "B"].score.tolist()
+    expected = stats.ttest_ind(a, b, equal_var=False)
+    res = execute("WELCH_T", df, "score", "arm", None)
+    assert isinstance(res, TestResult)
+    assert res.test_used == StatisticalTest.WELCH_T
+    # The executor stores `statistic` rounded to 4 dp; allow for that.
+    assert res.statistic == pytest.approx(expected.statistic, abs=1e-3)
+    assert res.p_value == pytest.approx(expected.pvalue, rel=1e-3)
+    assert res.is_significant is True
+    assert res.effect_size.measure_name == "Cohen's d"
+    assert any("Sensitivity" in n for n in res.notes)  # §5.5 sensitivity power
+
+
+def test_independent_t_has_levene_check() -> None:
+    res = execute("INDEPENDENT_T", _two_groups(), "score", "arm", None)
+    assert res.test_used == StatisticalTest.INDEPENDENT_T
+    assert any(c.assumption_name == "Equal variances" for c in res.assumption_checks)
+
+
+def test_mann_whitney() -> None:
+    res = execute("MANN_WHITNEY_U", _two_groups(), "score", "arm", None)
+    assert res.test_used == StatisticalTest.MANN_WHITNEY_U
+    assert res.effect_size.measure_name == "rank-biserial r"
+    assert 0.0 <= res.p_value <= 1.0
+
+
+def test_paired_t() -> None:
+    res = execute("PAIRED_T", _two_groups(), "score", "arm", None)
+    assert res.test_used == StatisticalTest.PAIRED_T
+    assert res.effect_size.measure_name == "Cohen's d_z"
+
+
+def test_wilcoxon() -> None:
+    res = execute("WILCOXON_SIGNED_RANK", _two_groups(), "score", "arm", None)
+    assert res.test_used == StatisticalTest.WILCOXON_SIGNED_RANK
+
+
+def test_welch_anova_three_groups() -> None:
+    res = execute("WELCH_ANOVA", _three_groups(), "score", "arm", None)
+    assert res.test_used == StatisticalTest.WELCH_ANOVA
+    assert res.effect_size.measure_name == "eta-squared"
+
+
+def test_one_way_anova() -> None:
+    res = execute("ONE_WAY_ANOVA", _three_groups(), "score", "arm", None)
+    assert res.test_used == StatisticalTest.ONE_WAY_ANOVA
+    assert res.degrees_of_freedom == pytest.approx(2.0)
+
+
+def test_kruskal() -> None:
+    res = execute("KRUSKAL_WALLIS", _three_groups(), "score", "arm", None)
+    assert res.test_used == StatisticalTest.KRUSKAL_WALLIS
+
+
+def test_chi_squared_rxc() -> None:
+    df = pd.DataFrame({
+        "treat": (["A"] * 30) + (["B"] * 30) + (["C"] * 30),
+        "out": ((["x"] * 10 + ["y"] * 10 + ["z"] * 10) * 3),
+    })
+    res = execute("CHI_SQUARED", df, "out", "treat", None)
+    assert res.test_used == StatisticalTest.CHI_SQUARED
+    assert res.effect_size.measure_name == "Cramér's V"
+
+
+def test_fisher_exact_2x2() -> None:
+    df = pd.DataFrame({"treat": ["A", "A", "A", "B", "B", "B", "A", "B"],
+                       "out": ["x", "x", "y", "y", "y", "x", "x", "y"]})
+    res = execute("FISHER_EXACT", df, "out", "treat", None)
+    assert res.test_used == StatisticalTest.FISHER_EXACT
+    assert res.effect_size.measure_name == "odds ratio"
+
+
+def test_mcnemar_2x2() -> None:
+    df = pd.DataFrame({"before": (["+"] * 20) + (["-"] * 20),
+                       "after": (["+"] * 10 + ["-"] * 10) + (["+"] * 15 + ["-"] * 5)})
+    res = execute("MCNEMAR", df, "after", "before", None)
+    assert res.test_used == StatisticalTest.MCNEMAR
+
+
+def test_pearson_matches_scipy() -> None:
+    x = [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0]
+    y = [2.1, 3.9, 6.2, 7.8, 10.1, 12.2, 13.8, 16.1, 18.0, 19.9]
+    df = pd.DataFrame({"x": x, "y": y})
+    expected = stats.pearsonr(x, y)
+    res = execute("PEARSON_CORRELATION", df, "y", None, "x", selection=None)
+    assert res.test_used == StatisticalTest.PEARSON_CORRELATION
+    assert res.statistic == pytest.approx(expected.statistic, abs=1e-3)
+    assert res.p_value == pytest.approx(expected.pvalue, abs=1e-4)
+
+
+def test_spearman() -> None:
+    df = pd.DataFrame({"x": list(range(12)), "y": [v ** 1.5 for v in range(12)]})
+    res = execute("SPEARMAN_CORRELATION", df, "y", None, "x", selection=None)
+    assert res.test_used == StatisticalTest.SPEARMAN_CORRELATION
+    assert res.effect_size.value == pytest.approx(1.0, abs=1e-9)  # monotone → ρ = 1
+
+
+def test_maxbet_parabola() -> None:
+    n = 120
+    xs = [-1.0 + 2.0 * i / (n - 1) for i in range(n)]
+    df = pd.DataFrame({"x": xs, "y": [x * x for x in xs]})
+    res = execute("MAXBET", df, "y", None, "x")
+    assert res.test_used == StatisticalTest.MAXBET
+    assert res.is_significant is True  # strong nonlinear dependence
+
+
+def test_poisson_regression() -> None:
+    df = pd.DataFrame({"x": list(range(1, 21)) * 2,
+                       "events": [max(0, round(0.6 * v)) for v in list(range(1, 21)) * 2]})
+    res = execute("POISSON_REGRESSION", df, "events", None, "x")
+    assert res.test_used == StatisticalTest.POISSON_REGRESSION
+    assert res.effect_size.measure_name == "incidence-rate ratio"
+
+
+def test_negative_binomial_regression() -> None:
+    counts = [0, 1, 0, 5, 2, 14, 0, 9, 1, 30, 3, 25, 0, 7, 40, 2, 18, 1, 22, 0] * 2
+    df = pd.DataFrame({"x": list(range(1, 21)) * 2, "events": counts})
+    res = execute("NEGATIVE_BINOMIAL_REGRESSION", df, "events", None, "x")
+    assert res.test_used == StatisticalTest.NEGATIVE_BINOMIAL_REGRESSION
+
+
+def test_unimplemented_test_is_untestable() -> None:
+    """Survival/diagnostic tests are in the enum but not wired — they must not crash."""
+    res = execute("LOG_RANK", _two_groups(), "score", "arm", None)
+    assert res.test_used == StatisticalTest.LOG_RANK
+    assert any(c.status.value == "UNTESTABLE" for c in res.assumption_checks)
+
+
+def test_unknown_test_raises() -> None:
+    with pytest.raises(ValueError):
+        execute("NOT_A_REAL_TEST", _two_groups(), "score", "arm", None)
+
+
+def test_single_group_degrades_gracefully() -> None:
+    df = pd.DataFrame({"arm": ["A"] * 10, "score": [float(i) for i in range(10)]})
+    res = execute("WELCH_T", df, "score", "arm", None)
+    assert isinstance(res, TestResult)
+    assert any(c.status.value == "UNTESTABLE" for c in res.assumption_checks)
+
+
+def test_result_is_json_serialisable() -> None:
+    res = execute("WELCH_T", _two_groups(), "score", "arm", None)
+    dumped = res.model_dump(mode="json")
+    assert dumped["test_used"] == "WELCH_T"
+    assert math.isfinite(dumped["p_value"])

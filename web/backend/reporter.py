@@ -1,132 +1,71 @@
-"""Report assembly for the web backend.
+"""Thin web adapter over the canonical engine reporter (`hta.modules.reporter`).
 
-`build_report(...)` returns a plain dict matching `src/hta/models/report.py::Report`:
-data_profile, study_design, test_result, plain_language_summary, caveats, plots,
-methods_text. Plots are emitted as PlotSpec dicts WITHOUT plotly_json — `api/run.py`
-enriches them via `plots.plotspec_to_plotly` before streaming the result.
+Parses the stored dict boundary (profile/design/test_result JSON) into Pydantic models,
+calls the engine to build a typed `Report`, then serialises back to a dict and re-attaches
+the presentation-only BET EDA plots (which carry `plotly_json` and are not part of the typed
+`Report.plots`). The rare "no test could be selected" result cannot populate the strict
+`TestResult` enum, so it is reported via a minimal fallback that still surfaces caveats/plots.
 """
 
 from __future__ import annotations
 
-import math
+import sys
+from pathlib import Path
 from typing import Any, Optional
 
 import pandas as pd
-from scipy import stats
+
+# Make the engine (`hta`, under src/) importable.
+_ROOT = Path(__file__).resolve().parents[2]
+if str(_ROOT / "src") not in sys.path:
+    sys.path.insert(0, str(_ROOT / "src"))
+
+from hta.models.data import DataProfile  # noqa: E402
+from hta.models.design import (  # noqa: E402
+    MeasurementType,
+    StudyDesign,
+    StudyDesignType,
+)
+from hta.models.test import TestResult  # noqa: E402
+from hta.modules.reporter import build_report as _build_report  # noqa: E402
 
 
-def _num_series(df: pd.DataFrame, col: str) -> list[float]:
-    return [float(v) for v in pd.to_numeric(df[col], errors="coerce").dropna().tolist()]
+def _default_design() -> StudyDesign:
+    return StudyDesign(
+        design_type=StudyDesignType.OBSERVATIONAL,
+        measurement_type=MeasurementType.BETWEEN_SUBJECTS,
+        is_randomized=False,
+        notes=["No design dialogue completed; assuming an observational design."],
+    )
 
 
-def _boxplot(df: pd.DataFrame, outcome: str, group: str) -> Optional[dict[str, Any]]:
-    sub = df[[outcome, group]].copy()
-    sub[outcome] = pd.to_numeric(sub[outcome], errors="coerce")
-    sub = sub.dropna()
-    data: dict[str, list[float]] = {}
-    for label, g in sub.groupby(group, sort=True):
-        data[str(label)] = [float(v) for v in g[outcome].tolist()]
-    if len(data) < 2:
-        return None
-    return {
-        "plot_type": "boxplot",
-        "title": f"{outcome} by {group}",
-        "x_label": group,
-        "y_label": outcome,
-        "data": data,
+def _attach_eda(report_dict: dict[str, Any], profile: dict[str, Any]) -> None:
+    """Append the web profile's pre-enriched BET EDA plots to the report plots."""
+    eda = profile.get("eda_plots") if isinstance(profile, dict) else None
+    if eda:
+        report_dict["plots"] = list(report_dict.get("plots", [])) + list(eda)
+
+
+def _degenerate_report(profile: dict[str, Any], design: dict[str, Any],
+                       test_result: dict[str, Any], selection: Any,
+                       hypothesis: str) -> dict[str, Any]:
+    """Minimal report for the case where no valid test was selected (test_used == '—')."""
+    caveats = [{"severity": "WARNING", "message": c,
+                "recommendation": "Choose a group or predictor variable to form a test."}
+               for c in (getattr(selection, "caveats", None) or [])]
+    msg = ("No statistical test could be selected for this combination of variables. "
+           "Pick a grouping variable (for a comparison) or a predictor (for an association).")
+    report = {
+        "data_profile": profile,
+        "study_design": design,
+        "test_result": test_result,
+        "plain_language_summary": msg,
+        "caveats": caveats,
+        "plots": [],
+        "methods_text": msg,
     }
-
-
-def _scatter(df: pd.DataFrame, outcome: str, predictor: str) -> Optional[dict[str, Any]]:
-    sub = df[[predictor, outcome]].copy()
-    sub[predictor] = pd.to_numeric(sub[predictor], errors="coerce")
-    sub[outcome] = pd.to_numeric(sub[outcome], errors="coerce")
-    sub = sub.dropna()
-    if len(sub) < 2:
-        return None
-    return {
-        "plot_type": "scatter",
-        "title": f"{outcome} vs {predictor}",
-        "x_label": predictor,
-        "y_label": outcome,
-        "data": {"x": [float(v) for v in sub[predictor].tolist()],
-                 "y": [float(v) for v in sub[outcome].tolist()]},
-    }
-
-
-def _qqplot(df: pd.DataFrame, outcome: str) -> Optional[dict[str, Any]]:
-    vals = _num_series(df, outcome)
-    n = len(vals)
-    if n < 3:
-        return None
-    mean = sum(vals) / n
-    sd = math.sqrt(sum((v - mean) ** 2 for v in vals) / (n - 1)) or 1.0
-    sample = sorted((v - mean) / sd for v in vals)
-    theoretical = [float(stats.norm.ppf((i + 0.5) / n)) for i in range(n)]
-    return {
-        "plot_type": "qqplot",
-        "title": f"Normal Q–Q plot — {outcome}",
-        "x_label": "Theoretical quantiles",
-        "y_label": "Standardized sample quantiles",
-        "data": {"theoretical": theoretical, "sample": sample},
-    }
-
-
-def _build_caveats(profile: dict[str, Any], design: dict[str, Any], test_result: dict[str, Any],
-                   selection: Any, outcome: str, group: Optional[str],
-                   predictor: Optional[str]) -> list[dict[str, Any]]:
-    caveats: list[dict[str, Any]] = []
-
-    for c in (getattr(selection, "caveats", None) or []):
-        caveats.append({"severity": "WARNING", "message": c,
-                        "recommendation": "Account for this in interpretation or modelling."})
-
-    in_model = {x for x in (group, predictor) if x}
-    for conf in design.get("confounders", []):
-        if conf.get("adjustment_recommended") and conf.get("name") not in in_model:
-            caveats.append({
-                "severity": "WARNING",
-                "message": (f"{conf['name']} ({conf.get('role', 'CONFOUNDER')}) is a "
-                            "confounder not included in this bivariate model."),
-                "recommendation": (f"Adjust for {conf['name']} (e.g. partial correlation or "
-                                   "a regression model) before drawing conclusions."),
-            })
-
-    targets = {outcome, group, predictor} - {None}
-    flagged = [f for f in profile.get("nonlinear_dependencies", [])
-               if f.get("significant") and (f.get("x") in targets or f.get("y") in targets)]
-    for f in flagged[:3]:
-        kind = ("nonlinear (invisible to correlation)" if f.get("nonlinear_only")
-                else f.get("form", "").lower())
-        caveats.append({
-            "severity": "INFO",
-            "message": (f"BET flagged a {kind} dependence between {f['x']} and {f['y']} "
-                        f"(z = {f.get('bet_z', 0):.2f})."),
-            "recommendation": "Consider whether a latent subgroup/subtype drives this pattern.",
-        })
-
-    p = test_result.get("p_value", 1.0)
-    if 0.04 <= p <= 0.06:
-        caveats.append({
-            "severity": "INFO",
-            "message": f"Marginal result (p = {p:.3f}) — close to the α = 0.05 threshold.",
-            "recommendation": "Interpret with caution and consider replication.",
-        })
-
-    if (design.get("design_type") == "OBSERVATIONAL"):
-        caveats.append({
-            "severity": "INFO",
-            "message": "Observational design — associations do not establish causation.",
-            "recommendation": "Avoid causal language; consider unmeasured confounding.",
-        })
-    return caveats
-
-
-def _normality_method(profile: dict[str, Any], outcome: str) -> str:
-    for v in profile.get("variables", []):
-        if v.get("name") == outcome and v.get("normality"):
-            return str(v["normality"].get("name", "Shapiro–Wilk"))
-    return "Shapiro–Wilk"
+    _attach_eda(report, profile)
+    return report
 
 
 def build_report(
@@ -140,55 +79,20 @@ def build_report(
     predictor: Optional[str],
     hypothesis: str,
 ) -> dict[str, Any]:
-    es = test_result["effect_size"]
-    sig = ("statistically significant" if test_result["is_significant"]
-           else "not statistically significant")
-    test_label = test_result["test_used"].replace("_", " ").title()
-    question = hypothesis or "the stated question"
+    """Assemble the report dict the SSE pipeline stores and streams."""
+    try:
+        result_model = TestResult.model_validate(test_result)
+    except Exception:
+        return _degenerate_report(profile, design, test_result, selection, hypothesis)
 
-    plain = (
-        f"The analysis used {test_label} to test the hypothesis: {question}. "
-        f"The result was {sig} (p = {test_result['p_value']:.3f}). "
-        f"The effect size was {es['measure_name']} = {es['value']:.2f} "
-        f"({es['interpretation']}; 95% CI [{es['ci_lower']:.2f}, {es['ci_upper']:.2f}])."
-    )
+    try:
+        design_model = StudyDesign.model_validate(design)
+    except Exception:
+        design_model = _default_design()
+    profile_model = DataProfile.model_validate(profile)
 
-    norm_method = _normality_method(profile, outcome)
-    rationale = getattr(selection, "rationale", "") or ""
-    why = rationale.rstrip(".").lower() or "it matched the data and design"
-    methods = (
-        f"{test_label} was selected because {why}. "
-        f"Normality was assessed with the {norm_method} test on the relevant distribution(s). "
-        f"The effect size ({es['measure_name']}) is reported with a 95% confidence interval "
-        f"(analytic where available, otherwise a 1000-sample bootstrap). "
-        f"Significance was evaluated at α = 0.05."
-    )
-
-    plots: list[dict[str, Any]] = []
-    if group:
-        bp = _boxplot(df, outcome, group)
-        if bp:
-            plots.append(bp)
-    elif predictor:
-        sc = _scatter(df, outcome, predictor)
-        if sc:
-            plots.append(sc)
-    qq = _qqplot(df, outcome)
-    if qq:
-        plots.append(qq)
-
-    # Carry the BET binary-interaction EDA plots (built at profiling time and shown at
-    # the Review step) into the report so the Results view and HTML export include them.
-    for ep in profile.get("eda_plots", []):
-        plots.append(ep)
-
-    caveats = _build_caveats(profile, design, test_result, selection, outcome, group, predictor)
-    return {
-        "data_profile": profile,
-        "study_design": design,
-        "test_result": test_result,
-        "plain_language_summary": plain,
-        "caveats": caveats,
-        "plots": plots,
-        "methods_text": methods,
-    }
+    report = _build_report(profile_model, design_model, result_model, selection, df,
+                           outcome, group, predictor, hypothesis)
+    report_dict = report.model_dump(mode="json")
+    _attach_eda(report_dict, profile)
+    return report_dict
