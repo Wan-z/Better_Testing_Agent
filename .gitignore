@@ -42,3 +42,6 @@ coverage.xml
 .vscode/
 .idea/
 web/data/
+
+# Challenge image sidecars (large, optional multimodal feature)
+data/**/images/
