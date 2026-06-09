@@ -100,3 +100,25 @@ def test_predictor_plots_and_bet_caveat() -> None:
     assert "scatter" in kinds and "qqplot" in kinds
     # The parabola is a flagged nonlinear dependence on the outcome → a BET caveat.
     assert any("BET" in c.message for c in rep.caveats)
+
+
+def test_adjusted_confounder_caveat_is_info() -> None:
+    df = pd.DataFrame({"y": [float(i) for i in range(20)],
+                       "x": [float(i % 7) for i in range(20)],
+                       "z": [float(i % 5) for i in range(20)]})
+    conf = Confounder(name="z", role=VariableRole.CONFOUNDER, is_measured=True,
+                      adjustment_recommended=True, rationale="confounds both")
+    rep = build_report(_profile("y"), _design(confounders=[conf]), _result(0.01), None,
+                       df, "y", None, "x", "q")
+    assert any(c.severity.value == "INFO" and "Adjusted for the confounder z" in c.message
+               for c in rep.caveats)
+
+
+def test_unmeasured_confounder_caveat_is_warning() -> None:
+    df = pd.DataFrame({"y": [float(i) for i in range(20)],
+                       "x": [float(i % 7) for i in range(20)]})
+    conf = Confounder(name="genetics", role=VariableRole.CONFOUNDER, is_measured=False,
+                      adjustment_recommended=True, rationale="latent common cause")
+    rep = build_report(_profile("y"), _design(confounders=[conf]), _result(0.01), None,
+                       df, "y", None, "x", "q")
+    assert any(c.severity.value == "WARNING" and "genetics" in c.message for c in rep.caveats)

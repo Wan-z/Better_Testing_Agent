@@ -6,6 +6,13 @@ import pandas as pd
 import pytest
 
 from hta.agent import HypothesisTestingAgent
+from hta.models.design import (
+    Confounder,
+    MeasurementType,
+    StudyDesign,
+    StudyDesignType,
+    VariableRole,
+)
 from hta.models.report import Report
 from hta.models.test import StatisticalTest
 
@@ -60,3 +67,21 @@ def test_unselectable_raises() -> None:
                        "label": ["x", "y"] * 10})
     with pytest.raises(ValueError):
         HypothesisTestingAgent().run(df, "q", "score")  # no group, no numeric partner
+
+
+def test_confounder_adjustment_changes_the_result() -> None:
+    """The headline §5.3 behaviour: a confounder that drives both variables produces an
+    adjusted estimate, and the report flags that the adjustment happened."""
+    z = [float(i % 20) for i in range(80)]
+    df = pd.DataFrame({"x": [zi + (i % 3) * 0.5 for i, zi in enumerate(z)],
+                       "y": [zi + (i % 5) * 0.4 for i, zi in enumerate(z)], "z": z})
+    design = StudyDesign(
+        design_type=StudyDesignType.OBSERVATIONAL,
+        measurement_type=MeasurementType.BETWEEN_SUBJECTS, is_randomized=False,
+        confounders=[Confounder(name="z", role=VariableRole.CONFOUNDER, is_measured=True,
+                                adjustment_recommended=True, rationale="confounds both")])
+    rep = HypothesisTestingAgent().run(df, "is y associated with x?", "y",
+                                       predictor_variable="x", design=design)
+    assert any("Adjusted for z" in n for n in rep.test_result.notes)
+    assert any(c.severity.value == "INFO" and "Adjusted for the confounder z" in c.message
+               for c in rep.caveats)

@@ -21,6 +21,7 @@ import pandas as pd
 from hta.models.data import DataProfile
 from hta.models.design import MeasurementType, StudyDesign, StudyDesignType
 from hta.models.report import Report
+from hta.modules.causal import CausalAnalyser
 from hta.modules.executor import execute
 from hta.modules.profiler import Column, build_data_profile, profile_column
 from hta.modules.reporter import build_report
@@ -98,6 +99,7 @@ class HypothesisTestingAgent:
 
         profile: DataProfile = build_data_profile(df, outcome_variable, group_variable)
         design = design or _default_design()
+        graph = CausalAnalyser().analyse(profile, design)   # causal stage (§5.3)
 
         cols = {c: profile_column(c, df[c].astype(str).tolist()) for c in df.columns}
         raw = {c: df[c].astype(str).tolist() for c in df.columns}
@@ -119,4 +121,4 @@ class HypothesisTestingAgent:
         result = execute(test_name, df, outcome_variable, group_variable, predictor,
                          design, selection)
         return build_report(profile, design, result, selection, df, outcome_variable,
-                            group_variable, predictor, hypothesis)
+                            group_variable, predictor, hypothesis, graph=graph)

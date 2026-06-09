@@ -21,6 +21,7 @@ import pandas as pd
 from scipy import stats
 
 from hta.models.test import StatisticalTest, TestResult
+from hta.modules.causal import usable_adjustment_covariates
 
 N_BOOTSTRAP = 1000
 BOOTSTRAP_SEED = 42
@@ -799,6 +800,50 @@ def _glm_count(df: pd.DataFrame, outcome: str, regressor: Optional[str],
                    [f"IRR = exp(β) for {regressor}; CI back-transformed from the log scale."])
 
 
+# ── confounder-adjusted estimate (§5.3) ──────────────────────────────────────
+
+def _adjusted_estimate(test_name: str, df: pd.DataFrame, outcome: str,
+                       group: Optional[str], predictor: Optional[str],
+                       covars: list[str]) -> Optional[str]:
+    """A confounder-adjusted estimate that the elicited confounders actually move:
+    partial correlation for the association tests, ANCOVA for the continuous group
+    comparisons. Returns a note, or None when adjustment does not apply / cannot be run."""
+    if not covars:
+        return None
+    cov_label = ", ".join(covars)
+    try:
+        import pingouin as pg
+        if test_name in ("PEARSON_CORRELATION", "SPEARMAN_CORRELATION") and predictor:
+            method = "spearman" if test_name == "SPEARMAN_CORRELATION" else "pearson"
+            sub = df[[outcome, predictor, *covars]].apply(pd.to_numeric, errors="coerce").dropna()
+            if len(sub) < len(covars) + 3:
+                return None
+            row = pg.partial_corr(data=sub, x=predictor, y=outcome, covar=list(covars),
+                                  method=method).iloc[0]
+            r, p = float(row["r"]), float(row["p_val"])
+            return (f"Adjusted for {cov_label}: partial {method} correlation r = {r:.3f} "
+                    f"(p = {_fmt_p(p)}) — compare with the unadjusted estimate above.")
+        if test_name in ("WELCH_T", "INDEPENDENT_T", "WELCH_ANOVA", "ONE_WAY_ANOVA") and group:
+            sub = df[[outcome, group, *covars]].copy()
+            for col in (outcome, *covars):
+                sub[col] = pd.to_numeric(sub[col], errors="coerce")
+            sub = sub.dropna()
+            if len(sub) < len(covars) + 4:
+                return None
+            anc = pg.ancova(data=sub, dv=outcome, between=group, covar=list(covars))
+            match = anc[anc["Source"] == group]
+            if match.empty:
+                return None
+            row = match.iloc[0]
+            f, p, np2 = float(row["F"]), float(row["p_unc"]), float(row["np2"])
+            tail = f", partial η² = {np2:.3f}" if math.isfinite(np2) else ""
+            return (f"Adjusted for {cov_label} (ANCOVA): {group} effect F = {f:.2f}, "
+                    f"p = {_fmt_p(p)}{tail}.")
+    except Exception:
+        return None
+    return None
+
+
 # ── dispatch ──────────────────────────────────────────────────────────────────
 
 def _dispatch(
@@ -867,4 +912,14 @@ def execute(
         d = _result(test_name, 0.0, 1.0, None, "—", 0.0, "r", 0.0, 0.0,
                     [_check("Execution", "UNTESTABLE", f"Test failed: {exc}")],
                     (0.0, 0.0), [f"Execution error: {exc}"])
+        return TestResult.model_validate(d)
+    # Confounder adjustment (§5.3) — best-effort; never let it sink the primary result.
+    try:
+        exclude = {x for x in (outcome, group, predictor) if x}
+        covars = usable_adjustment_covariates(design, df, exclude)
+        note = _adjusted_estimate(test_name, df, outcome, group, predictor, covars)
+        if note:
+            d["notes"].append(note)
+    except Exception:
+        pass
     return TestResult.model_validate(d)

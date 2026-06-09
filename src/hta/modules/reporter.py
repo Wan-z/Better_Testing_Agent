@@ -15,9 +15,10 @@ import pandas as pd
 from scipy import stats
 
 from hta.models.data import DataProfile
-from hta.models.design import StudyDesign, StudyDesignType
+from hta.models.design import CausalGraph, StudyDesign, StudyDesignType
 from hta.models.report import Caveat, CaveatSeverity, PlotSpec, Report
 from hta.models.test import TestResult
+from hta.modules.causal import CausalAnalyser, usable_adjustment_covariates
 
 
 def _num_series(df: pd.DataFrame, col: str) -> list[float]:
@@ -68,22 +69,39 @@ def _qqplot(df: pd.DataFrame, outcome: str) -> Optional[PlotSpec]:
 
 def _build_caveats(profile: DataProfile, design: StudyDesign, result: TestResult,
                    selection: Any, outcome: str, group: Optional[str],
-                   predictor: Optional[str]) -> list[Caveat]:
+                   predictor: Optional[str], df: pd.DataFrame,
+                   graph: CausalGraph) -> list[Caveat]:
     caveats: list[Caveat] = []
 
     for c in (getattr(selection, "caveats", None) or []):
         caveats.append(Caveat(severity=CaveatSeverity.WARNING, message=c,
                               recommendation="Account for this in interpretation or modelling."))
 
-    in_model = {x for x in (group, predictor) if x}
+    # Confounders (§5.3): report whether each recommended confounder was actually adjusted for.
+    exclude = {x for x in (outcome, group, predictor) if x}
+    usable = set(usable_adjustment_covariates(design, df, exclude))
     for conf in design.confounders:
-        if conf.adjustment_recommended and conf.name not in in_model:
+        if not conf.adjustment_recommended or conf.name in exclude:
+            continue
+        if conf.name in usable:
+            caveats.append(Caveat(
+                severity=CaveatSeverity.INFO,
+                message=(f"Adjusted for the confounder {conf.name} — see the adjusted "
+                         "estimate in the result notes."),
+                recommendation="Compare the adjusted and unadjusted estimates before concluding."))
+        elif conf.is_measured:
             caveats.append(Caveat(
                 severity=CaveatSeverity.WARNING,
-                message=(f"{conf.name} ({conf.role.value}) is a confounder not included in "
-                         "this bivariate model."),
-                recommendation=(f"Adjust for {conf.name} (e.g. partial correlation or a "
-                                "regression model) before drawing conclusions.")))
+                message=(f"{conf.name} is a recommended confounder that could not be used for "
+                         "adjustment (non-numeric or absent from the data)."),
+                recommendation=(f"Provide {conf.name} as a numeric column, or fit a model "
+                                "that includes it.")))
+        # Unmeasured recommended confounders are reported via the causal graph's warnings below.
+    for warning in graph.warnings:
+        caveats.append(Caveat(
+            severity=CaveatSeverity.WARNING, message=warning,
+            recommendation=("Unmeasured confounding cannot be removed by adjustment; "
+                            "interpret any causal claim with caution.")))
 
     targets = {outcome, group, predictor} - {None}
     flagged = [f for f in profile.nonlinear_dependencies
@@ -129,7 +147,9 @@ def build_report(
     group: Optional[str],
     predictor: Optional[str],
     hypothesis: str,
+    graph: Optional[CausalGraph] = None,
 ) -> Report:
+    graph = graph if graph is not None else CausalAnalyser().analyse(profile, design)
     es = result.effect_size
     sig = "statistically significant" if result.is_significant else "not statistically significant"
     test_label = result.test_used.value.replace("_", " ").title()
@@ -166,7 +186,8 @@ def build_report(
     if qq:
         plots.append(qq)
 
-    caveats = _build_caveats(profile, design, result, selection, outcome, group, predictor)
+    caveats = _build_caveats(profile, design, result, selection, outcome, group, predictor,
+                             df, graph)
     return Report(
         data_profile=profile,
         study_design=design,

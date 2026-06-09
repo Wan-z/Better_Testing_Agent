@@ -101,7 +101,7 @@ that the next stage consumes:
 |---|---|---|
 | Profile (+ BET screen) | `DataProfile` | `modules/profiler.py` |
 | Study design | `StudyDesign` | `modules/dialogue.py` — *planned*; v0.1.0 uses a default design |
-| Causal graph | `CausalGraph` | `modules/causal.py` — *planned* (confounders captured, not yet adjusted) |
+| Causal graph | `CausalGraph` | `modules/causal.py` — adjustment set + adjusted estimate (partial corr / ANCOVA) ✅ |
 | Select test | `StatisticalTest` (via `Selection`) | `modules/selector.py` |
 | Execute | `TestResult` | `modules/executor.py` |
 | Report | `Report` | `modules/reporter.py` |
@@ -817,16 +817,21 @@ Pydantic models); `agent.py` orchestrates them in a linear chain; and `cli.py` e
 
 **Deltas from the original plan:**
 - **No event bus** (Step 2) — the linear pipeline is wired directly by `agent.py` (§2, §10b #9).
-- **Dialogue / causal stages not yet built** (Step 4). The design dialogue currently lives in
-  the web layer (`web/backend/api/dialogue.py`); `agent.py` uses a default observational
-  design, and confounders are surfaced as caveats but not yet used to adjust the estimate.
+- **Dialogue stage not yet wired into the orchestrator** (Step 4) — it runs in the web layer
+  (`web/backend/api/dialogue.py`) and `agent.py` uses a default observational design. The
+  **causal stage is built** (`modules/causal.py`): elicited confounders now produce an
+  adjusted estimate (partial correlation for associations, ANCOVA for continuous group
+  comparisons) and accurate per-confounder caveats — they change the reported number.
 - **Executor coverage:** the two-sample t-tests, Mann–Whitney, paired t / Wilcoxon, one-way and
   Welch ANOVA, Kruskal–Wallis, χ²/Fisher/McNemar, Pearson/Spearman, the pure-Python MaxBET, and
   Poisson / negative-binomial. Survival (log-rank/Cox), ROC/AUC, and the reserved regressions
   are in the enum but return an UNTESTABLE result (not yet wired). MaxBET uses the pure-Python
   `bet_screen` engine, not the rpy2 → R bridge originally specified.
-- **Sensitivity power** (§5.5) is computed for two-sample t-tests; post-hoc localisation (§6.3)
-  and the H1–H9 healthcare caveat catalog (§6.7) are not yet emitted by the reporter.
+- **Sensitivity power** (§5.5, two-sample t) and **post-hoc localisation** (§6.3 —
+  Games–Howell / Tukey / Dunn, via pingouin + scikit-posthocs) are emitted; the χ²/Kruskal
+  effect sizes now carry real bootstrap CIs and the R×C Fisher test uses a Freeman–Halton
+  permutation. The **H1–H9 healthcare caveat catalog** (§6.7) and the survival/diagnostic
+  executor branches are still not wired.
 
 **Test results:** 164 passing; **90% line coverage** on `src/hta`; `ruff check src/` and
 `mypy --strict src/hta` both clean. New suites: `test_{profiler,selector,executor,reporter,
@@ -1077,4 +1082,4 @@ hta run --data data.csv --hypothesis "Group A < Group B" --group group --outcome
 
 ---
 
-*This document is updated at the end of each completed step. Last updated 2026-06-08: implemented the Step-2…8 pipeline as a consolidated, bus-free engine in `src/hta/modules/` (profiler / selector / executor / reporter) with `agent.py` orchestrator and `cli.py` (`hta run`); the web backend and the zero-dependency playground now delegate to this single engine; added engine test suites (164 tests, 90% coverage on `src/hta`; `ruff check src/` and `mypy --strict src/hta` clean); §2/§3/§8–§10 updated to drop the event bus and reflect the built pipeline. Earlier 2026-06-04: (1) reconciled the test-selector decision tree to the stated policy — Welch's t / Welch's ANOVA as unconditional defaults with no Levene pretest, normality as a graded NONE/MILD/STRONG signal, no formal normality test above N=2000 (§6.1–§6.4); (2) general data-form coverage specialized for healthcare — `VariableType` 4→9 (COUNT, TIME_TO_EVENT, DATETIME, GEOSPATIAL, IDENTIFIER), `StatisticalTest` 17→24 (Poisson/negative-binomial, log-rank/Cox, ROC-AUC selectable; mixed-model/GEE reserved), `StudyDesign.reporting_standard`, healthcare branches and caveat catalog (§6.5–§6.7); (3) BET pairwise nonlinear-dependence EDA screen as the profiler's discovery stage (§5.1a) with `DependenceForm`/`DependenceFinding` models, citing Xiang et al. (2023), Ann. Appl. Stat. 17(4), DOI 10.1214/23-AOAS1745; (4) synthetic NC overdose/clinic-access demo dataset and clinic-density heatmap renderer. Earlier 2026-06-01: BET/MaxBET/BEAST integration and §4.3 enum count 14→17. Earlier 2026-05-29: §10b Design Review Notes and Cramér's V fix.*
+*This document is updated at the end of each completed step. Last updated 2026-06-09: (Phase 2) post-hoc localisation (Games–Howell / Tukey / Dunn via pingouin + scikit-posthocs), real bootstrap CIs for the χ²/Kruskal effect sizes, an R×C Fisher (Freeman–Halton) permutation test, and a true Welch ANOVA replacing the mislabelled Alexander–Govern; (Phase 3) the causal stage — `modules/causal.py` builds the adjustment set and the executor produces a confounder-adjusted estimate (partial correlation / ANCOVA), so elicited confounders now change the reported result. Earlier 2026-06-08: implemented the Step-2…8 pipeline as a consolidated, bus-free engine in `src/hta/modules/` (profiler / selector / executor / reporter) with `agent.py` orchestrator and `cli.py` (`hta run`); the web backend and the zero-dependency playground now delegate to this single engine; added engine test suites (164 tests, 90% coverage on `src/hta`; `ruff check src/` and `mypy --strict src/hta` clean); §2/§3/§8–§10 updated to drop the event bus and reflect the built pipeline. Earlier 2026-06-04: (1) reconciled the test-selector decision tree to the stated policy — Welch's t / Welch's ANOVA as unconditional defaults with no Levene pretest, normality as a graded NONE/MILD/STRONG signal, no formal normality test above N=2000 (§6.1–§6.4); (2) general data-form coverage specialized for healthcare — `VariableType` 4→9 (COUNT, TIME_TO_EVENT, DATETIME, GEOSPATIAL, IDENTIFIER), `StatisticalTest` 17→24 (Poisson/negative-binomial, log-rank/Cox, ROC-AUC selectable; mixed-model/GEE reserved), `StudyDesign.reporting_standard`, healthcare branches and caveat catalog (§6.5–§6.7); (3) BET pairwise nonlinear-dependence EDA screen as the profiler's discovery stage (§5.1a) with `DependenceForm`/`DependenceFinding` models, citing Xiang et al. (2023), Ann. Appl. Stat. 17(4), DOI 10.1214/23-AOAS1745; (4) synthetic NC overdose/clinic-access demo dataset and clinic-density heatmap renderer. Earlier 2026-06-01: BET/MaxBET/BEAST integration and §4.3 enum count 14→17. Earlier 2026-05-29: §10b Design Review Notes and Cramér's V fix.*

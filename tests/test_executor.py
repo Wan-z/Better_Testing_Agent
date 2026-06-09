@@ -238,3 +238,33 @@ def test_fisher_rxc_freeman_halton() -> None:
     assert res.effect_size.measure_name == "Cramér's V"  # OR undefined for R×C
     assert 0.0 <= res.p_value <= 1.0
     assert any("Freeman" in c.note for c in res.assumption_checks)
+
+
+# ── Phase 3: confounder-adjusted estimates (§5.3) ─────────────────────────────
+
+def test_adjusted_partial_correlation_note() -> None:
+    # z drives both x and y; the partial correlation must differ from the raw one.
+    z = [float(i % 15) for i in range(60)]
+    df = pd.DataFrame({"x": [zi + (i % 3) * 0.4 for i, zi in enumerate(z)],
+                       "y": [zi + (i % 4) * 0.3 for i, zi in enumerate(z)], "z": z})
+    design = {"confounders": [{"name": "z", "is_measured": True,
+                               "adjustment_recommended": True}]}
+    res = execute("SPEARMAN_CORRELATION", df, "y", None, "x", design, None)
+    assert any("Adjusted for z" in n and "partial" in n for n in res.notes)
+
+
+def test_adjusted_ancova_note() -> None:
+    rows = []
+    for label, base in (("A", 10.0), ("B", 14.0)):
+        for i in range(15):
+            rows.append({"g": label, "y": base + (i % 6) * 0.7 + 0.5 * (i % 4), "c": float(i % 6)})
+    df = pd.DataFrame(rows)
+    design = {"confounders": [{"name": "c", "is_measured": True,
+                              "adjustment_recommended": True}]}
+    res = execute("WELCH_T", df, "y", "g", None, design, None)
+    assert any("ANCOVA" in n for n in res.notes)
+
+
+def test_no_adjustment_without_confounders() -> None:
+    res = execute("WELCH_T", _two_groups(), "score", "arm", None)
+    assert not any("Adjusted for" in n for n in res.notes)
