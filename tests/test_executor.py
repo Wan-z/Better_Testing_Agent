@@ -180,3 +180,61 @@ def test_result_is_json_serialisable() -> None:
     dumped = res.model_dump(mode="json")
     assert dumped["test_used"] == "WELCH_T"
     assert math.isfinite(dumped["p_value"])
+
+
+# ── Phase 2: post-hoc, real CIs, R×C exact ────────────────────────────────────
+
+def test_welch_anova_is_true_welch_with_posthoc() -> None:
+    import pingouin as pg
+    df = _three_groups()
+    res = execute("WELCH_ANOVA", df, "score", "arm", None)
+    expected_f = float(pg.welch_anova(data=df, dv="score", between="arm").iloc[0]["F"])
+    # The statistic must be Welch's F (pingouin), not scipy's Alexander–Govern.
+    assert res.statistic == pytest.approx(expected_f, abs=1e-3)
+    assert any("Games–Howell" in n for n in res.notes)
+    assert res.confidence_interval[0] != res.confidence_interval[1]  # real bootstrap CI
+
+
+def test_welch_anova_closed_form_matches_pingouin() -> None:
+    import pingouin as pg
+
+    from hta.modules.executor import _group_arrays, _welch_anova_closed_form
+    df = _three_groups()
+    _, groups = _group_arrays(df, "score", "arm")
+    f, p, _df1 = _welch_anova_closed_form(groups)
+    expected = pg.welch_anova(data=df, dv="score", between="arm").iloc[0]
+    assert f == pytest.approx(float(expected["F"]), rel=1e-6)
+    assert p == pytest.approx(float(expected["p_unc"]), rel=1e-6)
+
+
+def test_one_way_anova_posthoc_in_notes() -> None:
+    res = execute("ONE_WAY_ANOVA", _three_groups(), "score", "arm", None)
+    assert any("Tukey" in n for n in res.notes)
+
+
+def test_kruskal_posthoc_and_real_ci() -> None:
+    res = execute("KRUSKAL_WALLIS", _three_groups(), "score", "arm", None)
+    assert any("Dunn" in n for n in res.notes)
+    assert res.confidence_interval[0] != res.confidence_interval[1]
+
+
+def test_chi_squared_2x2_reports_odds_ratio() -> None:
+    df = pd.DataFrame({"t": (["A"] * 20) + (["B"] * 20),
+                       "out": (["x"] * 14 + ["y"] * 6) + (["x"] * 5 + ["y"] * 15)})
+    res = execute("CHI_SQUARED", df, "out", "t", None)
+    assert res.effect_size.measure_name == "Cramér's V"
+    assert any("odds ratio" in n and "φ" in n for n in res.notes)
+    assert res.confidence_interval[0] != res.confidence_interval[1]
+
+
+def test_fisher_rxc_freeman_halton() -> None:
+    df = pd.DataFrame({
+        "t": (["A"] * 12) + (["B"] * 12) + (["C"] * 12),
+        "out": (["x"] * 8 + ["y"] * 2 + ["z"] * 2) + (["x"] * 2 + ["y"] * 8 + ["z"] * 2)
+               + (["x"] * 2 + ["y"] * 2 + ["z"] * 8),
+    })
+    res = execute("FISHER_EXACT", df, "out", "t", None)
+    assert res.test_used == StatisticalTest.FISHER_EXACT
+    assert res.effect_size.measure_name == "Cramér's V"  # OR undefined for R×C
+    assert 0.0 <= res.p_value <= 1.0
+    assert any("Freeman" in c.note for c in res.assumption_checks)

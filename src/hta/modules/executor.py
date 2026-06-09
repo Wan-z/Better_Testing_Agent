@@ -284,6 +284,169 @@ def _min_n_check(groups: list[list[float]], floor: int = 5) -> dict[str, Any]:
                   f"Smallest group n = {smallest} (need ≥ {floor}).")
 
 
+# ── post-hoc localisation (§6.3) ──────────────────────────────────────────────
+
+def _fmt_p(p: float) -> str:
+    if not math.isfinite(p):
+        return "n/a"
+    return "<0.001" if p < 0.001 else f"{p:.3f}"
+
+
+def _posthoc_note(sub: pd.DataFrame, outcome: str, group: str, kind: str) -> Optional[str]:
+    """Pairwise post-hoc comparisons (§6.3): Games–Howell (Welch ANOVA), Tukey HSD (one-way
+    ANOVA), or Dunn + Holm (Kruskal–Wallis). Returns a compact note, or None if the backing
+    library is unavailable or the comparison cannot be computed."""
+    try:
+        pairs: list[tuple[str, str, float]] = []
+        if kind == "dunn":
+            import scikit_posthocs as sp
+            m = sp.posthoc_dunn(sub, val_col=outcome, group_col=group, p_adjust="holm")
+            cols = [str(col) for col in m.columns]
+            for i in range(len(cols)):
+                for j in range(i + 1, len(cols)):
+                    pairs.append((cols[i], cols[j], float(m.iloc[i, j])))
+            label = "Dunn (Holm)"
+        else:
+            import pingouin as pg
+            if kind == "gameshowell":
+                res = pg.pairwise_gameshowell(data=sub, dv=outcome, between=group)
+                pcol, label = "pval", "Games–Howell"
+            else:
+                res = pg.pairwise_tukey(data=sub, dv=outcome, between=group)
+                pcol, label = "p_tukey", "Tukey HSD"
+            pairs = [(str(row["A"]), str(row["B"]), float(row[pcol]))
+                     for _, row in res.iterrows()]
+        if not pairs:
+            return None
+        body = "; ".join(f"{a}–{b} p={_fmt_p(p)}" for a, b, p in pairs)
+        return f"{label} post-hoc: {body}."
+    except Exception:
+        return None
+
+
+def _welch_anova(sub: pd.DataFrame, outcome: str, group: str,
+                 groups: list[list[float]]) -> tuple[float, float, Optional[float]]:
+    """Welch's heteroscedastic one-way ANOVA via pingouin; falls back to a closed-form
+    computation if pingouin is unavailable. Never Alexander–Govern (a different test)."""
+    try:
+        import pingouin as pg
+        row = pg.welch_anova(data=sub, dv=outcome, between=group).iloc[0]
+        return float(row["F"]), float(row["p_unc"]), float(row["ddof1"])
+    except Exception:
+        return _welch_anova_closed_form(groups)
+
+
+def _welch_anova_closed_form(groups: list[list[float]]) -> tuple[float, float, Optional[float]]:
+    k = len(groups)
+    weights = [len(g) / _var(g) for g in groups if len(g) > 1 and _var(g) > 0]
+    if k < 2 or len(weights) < k:                 # degenerate variance — last-resort fallback
+        res = stats.f_oneway(*groups)
+        return float(res.statistic), float(res.pvalue), float(k - 1)
+    means = [_mean(g) for g in groups]
+    sw = sum(weights)
+    gbar = sum(w * m for w, m in zip(weights, means)) / sw
+    num = sum(w * (m - gbar) ** 2 for w, m in zip(weights, means)) / (k - 1)
+    tmp = sum((1 - w / sw) ** 2 / (len(g) - 1) for w, g in zip(weights, groups))
+    f = num / (1 + 2 * (k - 2) / (k * k - 1) * tmp)
+    df2 = (k * k - 1) / (3 * tmp) if tmp > 0 else float("inf")
+    return f, float(stats.f.sf(f, k - 1, df2)), float(k - 1)
+
+
+# ── contingency effect-size CIs and the R×C exact test (§6.4) ──────────────────
+
+def _codes(values: list[str]) -> tuple[list[int], int]:
+    cats = sorted(set(values))
+    idx = {c: i for i, c in enumerate(cats)}
+    return [idx[v] for v in values], len(cats)
+
+
+def _table_chi2(tab: list[list[int]], n_rows: int, n_cols: int) -> tuple[float, float]:
+    """Pearson χ² and grand total for a count table, skipping zero-expected cells."""
+    tot = float(sum(sum(row) for row in tab))
+    if tot <= 0:
+        return 0.0, 0.0
+    rowt = [sum(row) for row in tab]
+    colt = [sum(tab[i][j] for i in range(n_rows)) for j in range(n_cols)]
+    chi2 = 0.0
+    for i in range(n_rows):
+        for j in range(n_cols):
+            e = rowt[i] * colt[j] / tot
+            if e > 0:
+                chi2 += (tab[i][j] - e) ** 2 / e
+    return chi2, tot
+
+
+def _bootstrap_cramers_v(o_codes: list[int], g_codes: list[int],
+                         n_rows: int, n_cols: int) -> tuple[float, float]:
+    """Percentile bootstrap CI for Cramér's V (resample the paired observations)."""
+    n_dim = min(n_rows - 1, n_cols - 1)
+    if n_dim < 1:
+        return (0.0, 0.0)
+    rng = random.Random(BOOTSTRAP_SEED)
+    pairs = list(zip(o_codes, g_codes))
+    n = len(pairs)
+    out: list[float] = []
+    for _ in range(N_BOOTSTRAP):
+        tab = [[0] * n_cols for _ in range(n_rows)]
+        for _ in range(n):
+            a, b = pairs[rng.randrange(n)]
+            tab[a][b] += 1
+        chi2, tot = _table_chi2(tab, n_rows, n_cols)
+        if tot > 0:
+            v = math.sqrt(chi2 / (tot * n_dim))
+            if math.isfinite(v):
+                out.append(v)
+    out.sort()
+    return (_pct(out, 0.025), _pct(out, 0.975)) if out else (0.0, 0.0)
+
+
+def _bootstrap_kruskal_eta(groups: list[list[float]]) -> tuple[float, float]:
+    rng = random.Random(BOOTSTRAP_SEED)
+    k = len(groups)
+    out: list[float] = []
+    for _ in range(N_BOOTSTRAP):
+        rs = [rng.choices(g, k=len(g)) for g in groups]
+        try:
+            h = float(stats.kruskal(*rs).statistic)
+            n = sum(len(g) for g in rs)
+            e = max(0.0, (h - k + 1) / (n - k)) if n > k else 0.0
+            if math.isfinite(e):
+                out.append(e)
+        except Exception:
+            pass
+    out.sort()
+    return (_pct(out, 0.025), _pct(out, 0.975)) if out else (0.0, 0.0)
+
+
+def _or_phi_2x2(table: Any, chi2: float, n: int) -> tuple[float, float]:
+    a, b = float(table.iloc[0, 0]), float(table.iloc[0, 1])
+    c, d = float(table.iloc[1, 0]), float(table.iloc[1, 1])
+    odds = (a * d) / (b * c) if b > 0 and c > 0 else float("nan")
+    phi = math.sqrt(chi2 / n) if n else 0.0
+    return _finite(odds, 1.0), phi
+
+
+def _rxc_fisher_perm(o_codes: list[int], g_codes: list[int],
+                     n_rows: int, n_cols: int, n_perm: int = 2000) -> tuple[float, int]:
+    """Freeman–Halton simulated-exact p-value for an R×C table: permute the group labels
+    (which fixes both margins) and compare the χ² statistic. Returns (p_value, n_perm)."""
+    def chi2_of(gc: list[int]) -> float:
+        tab = [[0] * n_cols for _ in range(n_rows)]
+        for a, b in zip(o_codes, gc):
+            tab[a][b] += 1
+        return _table_chi2(tab, n_rows, n_cols)[0]
+
+    obs = chi2_of(g_codes)
+    rng = random.Random(BOOTSTRAP_SEED)
+    perm = list(g_codes)
+    count = 0
+    for _ in range(n_perm):
+        rng.shuffle(perm)
+        if chi2_of(perm) >= obs - 1e-9:
+            count += 1
+    return (count + 1) / (n_perm + 1), n_perm
+
+
 # ── per-test executors ────────────────────────────────────────────────────────
 
 def _two_sample_t(df: pd.DataFrame, outcome: str, group: str, equal_var: bool) -> dict[str, Any]:
@@ -381,14 +544,16 @@ def _anova(df: pd.DataFrame, outcome: str, group: str, welch: bool) -> dict[str,
     labels, groups = _group_arrays(df, outcome, group)
     if len(groups) < 2:
         return _not_implemented("WELCH_ANOVA" if welch else "ONE_WAY_ANOVA")
+    sub = df[[outcome, group]].copy()
+    sub[outcome] = pd.to_numeric(sub[outcome], errors="coerce")
+    sub = sub.dropna()
     if welch:
-        res = stats.alexandergovern(*groups)
-        statistic, p, dof = res.statistic, res.pvalue, None
-        name = "WELCH_ANOVA"
+        statistic, p, dof = _welch_anova(sub, outcome, group, groups)  # true Welch, not A–G
+        name, posthoc = "WELCH_ANOVA", _posthoc_note(sub, outcome, group, "gameshowell")
     else:
         res = stats.f_oneway(*groups)
-        statistic, p, dof = res.statistic, res.pvalue, float(len(groups) - 1)
-        name = "ONE_WAY_ANOVA"
+        statistic, p, dof = float(res.statistic), float(res.pvalue), float(len(groups) - 1)
+        name, posthoc = "ONE_WAY_ANOVA", _posthoc_note(sub, outcome, group, "tukey")
     eta2 = _eta_squared(groups)
     ci = _bootstrap_eta(groups)
     checks = [
@@ -396,8 +561,9 @@ def _anova(df: pd.DataFrame, outcome: str, group: str, welch: bool) -> dict[str,
         _min_n_check(groups),
         _check("Independence of observations", "UNTESTABLE", "Assumed by design."),
     ]
-    notes = [f"{len(groups)} groups compared; a Holm-adjusted post-hoc "
-             "(Games–Howell/Tukey) is recommended to localize differences."]
+    notes = [f"{len(groups)} groups compared."]
+    notes.append(posthoc if posthoc
+                 else "Post-hoc localisation unavailable (needs pingouin/scikit-posthocs).")
     return _result(name, statistic, p, dof, "eta-squared", eta2, "eta2",
                    ci[0], ci[1], checks, ci, notes)
 
@@ -424,15 +590,21 @@ def _kruskal(df: pd.DataFrame, outcome: str, group: str) -> dict[str, Any]:
     res = stats.kruskal(*groups)
     k = len(groups)
     n = sum(len(g) for g in groups)
-    eta2 = (float(res.statistic) - k + 1) / (n - k) if n > k else 0.0
-    eta2 = max(0.0, eta2)
+    eta2 = max(0.0, (float(res.statistic) - k + 1) / (n - k)) if n > k else 0.0
+    ci = _bootstrap_kruskal_eta(groups)
+    sub = df[[outcome, group]].copy()
+    sub[outcome] = pd.to_numeric(sub[outcome], errors="coerce")
+    sub = sub.dropna()
+    posthoc = _posthoc_note(sub, outcome, group, "dunn")
     checks = [
         _min_n_check(groups),
         _check("Independence of observations", "UNTESTABLE", "Assumed by design."),
     ]
+    notes = ["Distribution-free omnibus test."]
+    if posthoc:
+        notes.append(posthoc)
     return _result("KRUSKAL_WALLIS", res.statistic, res.pvalue, float(k - 1),
-                   "eta-squared (rank)", eta2, "eta2", eta2, eta2, checks, (eta2, eta2),
-                   ["Distribution-free omnibus test; Dunn's post-hoc (Holm) recommended."])
+                   "eta-squared (rank)", eta2, "eta2", ci[0], ci[1], checks, ci, notes)
 
 
 def _chi_squared(df: pd.DataFrame, outcome: str, group: str) -> dict[str, Any]:
@@ -444,30 +616,58 @@ def _chi_squared(df: pd.DataFrame, outcome: str, group: str) -> dict[str, Any]:
     r, c = table.shape
     v = math.sqrt(chi2 / (n * min(r - 1, c - 1))) if n and min(r - 1, c - 1) else 0.0
     min_exp = float(expected.min())
+    sub = df[[outcome, group]].dropna()
+    o_codes, n_rows = _codes(sub[outcome].astype(str).tolist())
+    g_codes, n_cols = _codes(sub[group].astype(str).tolist())
+    ci = _bootstrap_cramers_v(o_codes, g_codes, n_rows, n_cols)
     checks = [
         _check("Expected cell counts ≥ 5", "MET" if min_exp >= 5 else "VIOLATED",
                f"Smallest expected count = {min_exp:.2f}. "
                + ("" if min_exp >= 5 else "Fisher's exact is preferable.")),
         _check("Independence of observations", "UNTESTABLE", "Assumed by design."),
     ]
+    notes = [f"{r}×{c} contingency table, N = {n}."]
+    if (r, c) == (2, 2):
+        odds, phi = _or_phi_2x2(table, float(chi2), n)
+        notes.append(f"2×2: odds ratio = {odds:.3f}, φ = {phi:.3f}.")
     return _result("CHI_SQUARED", chi2, p, float(dof), "Cramér's V", v, "v",
-                   v, v, checks, (v, v),
-                   [f"{r}×{c} contingency table, N = {n}."])
+                   ci[0], ci[1], checks, ci, notes)
 
 
 def _fisher(df: pd.DataFrame, outcome: str, group: str) -> dict[str, Any]:
     table = pd.crosstab(df[outcome], df[group])
-    if table.shape != (2, 2):
+    if table.shape[0] < 2 or table.shape[1] < 2:
         return _not_implemented("FISHER_EXACT")
-    odds, p = stats.fisher_exact(table.values)
+    if table.shape == (2, 2):
+        odds, p = stats.fisher_exact(table.values)
+        checks = [
+            _check("2×2 table", "MET", "Outcome and group are both binary."),
+            _check("Small expected counts", "UNTESTABLE",
+                   "Fisher's exact is valid for any expected counts."),
+        ]
+        return _result("FISHER_EXACT", odds, p, None, "odds ratio", odds, "r",
+                       odds, odds, checks, (odds, odds),
+                       ["Exact test for a 2×2 contingency table."])
+    # R×C: Freeman–Halton simulated-exact p-value + Cramér's V (odds ratio is undefined).
+    sub = df[[outcome, group]].dropna()
+    o_codes, n_rows = _codes(sub[outcome].astype(str).tolist())
+    g_codes, n_cols = _codes(sub[group].astype(str).tolist())
+    p, n_perm = _rxc_fisher_perm(o_codes, g_codes, n_rows, n_cols)
+    chi2 = float(stats.chi2_contingency(table)[0])
+    n = int(table.values.sum())
+    n_dim = min(n_rows - 1, n_cols - 1)
+    v = math.sqrt(chi2 / (n * n_dim)) if n and n_dim else 0.0
+    ci = _bootstrap_cramers_v(o_codes, g_codes, n_rows, n_cols)
     checks = [
-        _check("2×2 table", "MET", "Outcome and group are both binary."),
-        _check("Small expected counts", "UNTESTABLE",
-               "Fisher's exact is valid for any expected counts."),
+        _check("Exact test", "MET",
+               f"Freeman–Halton via {n_perm} fixed-margin permutations "
+               "(no large-sample χ² approximation)."),
+        _check("Independence of observations", "UNTESTABLE", "Assumed by design."),
     ]
-    return _result("FISHER_EXACT", odds, p, None, "odds ratio", odds, "r",
-                   odds, odds, checks, (odds, odds),
-                   ["Exact test for a 2×2 contingency table."])
+    return _result("FISHER_EXACT", chi2, p, None, "Cramér's V", v, "v",
+                   ci[0], ci[1], checks, ci,
+                   [f"{n_rows}×{n_cols} table, N = {n}; odds ratio is undefined for R×C "
+                    "(Cramér's V reported)."])
 
 
 def _mcnemar(df: pd.DataFrame, outcome: str, group: str) -> dict[str, Any]:
