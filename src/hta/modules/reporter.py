@@ -9,6 +9,7 @@ objects — Plotly rendering and the presentation-only BET EDA plots are added b
 from __future__ import annotations
 
 import math
+import re
 from typing import Any, Optional
 
 import pandas as pd
@@ -17,8 +18,19 @@ from scipy import stats
 from hta.models.data import DataProfile
 from hta.models.design import CausalGraph, StudyDesign, StudyDesignType
 from hta.models.report import Caveat, CaveatSeverity, PlotSpec, Report
-from hta.models.test import TestResult
+from hta.models.test import AssumptionStatus, StatisticalTest, TestResult
 from hta.modules.causal import CausalAnalyser, usable_adjustment_covariates
+
+# Areal / geospatial column names → ecological analysis (the H1–H3 caveat triggers).
+_GEO_RE = re.compile(r"(fips|geoid|\blat\b|latitude|\blon\b|\blng\b|longitude|county|tract|"
+                     r"census|\bzip\b|zipcode|postal|\bregion\b|\bstate\b|cbsa|\bmsa\b)",
+                     re.IGNORECASE)
+# A subject/cluster key whose values repeat → unmodelled non-independence (the H9 trigger).
+_CLUSTER_RE = re.compile(r"(^id$|_id$|subject|patient|cluster|\bsite\b|hospital|cent(er|re)|"
+                         r"household|family|school|provider)", re.IGNORECASE)
+# Relative effect measures whose absolute magnitude (and NNT) should be judged separately (H7).
+_RATIO_MEASURES = {"odds ratio", "hazard ratio", "incidence-rate ratio", "risk ratio",
+                   "odds ratio (discordant)"}
 
 
 def _num_series(df: pd.DataFrame, col: str) -> list[float]:
@@ -137,6 +149,92 @@ def _normality_method(profile: DataProfile, outcome: str) -> str:
     return "Shapiro–Wilk"
 
 
+def _reporting_standard(design: StudyDesign, result: TestResult) -> Optional[str]:
+    """The EQUATOR reporting guideline implied by the design / analysis (§6.6)."""
+    if result.test_used == StatisticalTest.ROC_AUC:
+        return "STARD"                                    # diagnostic-accuracy study
+    if design.design_type == StudyDesignType.EXPERIMENTAL and design.is_randomized:
+        return "CONSORT"                                  # randomised controlled trial
+    if design.design_type in (StudyDesignType.OBSERVATIONAL,
+                              StudyDesignType.QUASI_EXPERIMENTAL):
+        return "STROBE"                                   # observational study
+    return None
+
+
+def _healthcare_caveats(result: TestResult, df: pd.DataFrame,
+                        exclude: set[str]) -> list[Caveat]:
+    """The deterministic H1–H9 healthcare caveat catalog (§6.7), keyed off the data form, the
+    chosen test, and the assumption results — reproducible rather than LLM-invented."""
+    out: list[Caveat] = []
+    test = result.test_used
+    measure = result.effect_size.measure_name.lower()
+
+    def add(sev: CaveatSeverity, msg: str, rec: str) -> None:
+        out.append(Caveat(severity=sev, message=msg, recommendation=rec))
+
+    # H1–H3 — areal / ecological analysis.
+    geo = [str(c) for c in df.columns if _GEO_RE.search(str(c))]
+    if geo:
+        add(CaveatSeverity.WARNING,
+            f"Ecological fallacy: with areal units ({', '.join(geo[:3])}), an area-level "
+            "association need not hold for individuals.",
+            "Use person-level data to make person-level inferences.")
+        add(CaveatSeverity.INFO,
+            "Modifiable areal unit problem (MAUP): associations can change with the choice or "
+            "scale of the areal units.",
+            "Check sensitivity to how the areal units are defined.")
+        add(CaveatSeverity.WARNING,
+            "Spatial autocorrelation among neighbouring areal units can understate standard "
+            "errors (Moran's I).",
+            "Consider a spatial or cluster-robust model.")
+
+    # H4 — Poisson overdispersion reminder.
+    if test == StatisticalTest.POISSON_REGRESSION:
+        add(CaveatSeverity.INFO,
+            "Poisson regression assumes the variance equals the mean.",
+            "If the counts are overdispersed, prefer negative-binomial regression.")
+
+    # H5–H6 — survival.
+    if test in (StatisticalTest.LOG_RANK, StatisticalTest.COX_REGRESSION):
+        ph_violated = any(c.assumption_name == "Proportional hazards"
+                          and c.status == AssumptionStatus.VIOLATED
+                          for c in result.assumption_checks)
+        if ph_violated:
+            add(CaveatSeverity.WARNING,
+                "Non-proportional hazards: a single hazard ratio is misleading when the "
+                "proportional-hazards assumption is violated.",
+                "Consider time-varying effects or restricted mean survival time (RMST).")
+        add(CaveatSeverity.INFO,
+            "Survival analysis assumes non-informative censoring.",
+            "Verify that censoring / dropout is unrelated to prognosis.")
+
+    # H7 — a significant relative effect whose absolute magnitude is judged separately.
+    if result.is_significant and measure in _RATIO_MEASURES:
+        add(CaveatSeverity.WARNING,
+            f"A statistically significant {result.effect_size.measure_name} is a relative "
+            "effect; the absolute benefit (and the NNT) may still be small.",
+            "Judge the absolute effect against the minimal clinically important difference (MCID).")
+
+    # H8 — diagnostic predictive values depend on prevalence.
+    if test == StatisticalTest.ROC_AUC:
+        add(CaveatSeverity.INFO,
+            "Sensitivity and specificity are prevalence-independent, but predictive values "
+            "(PPV/NPV) depend on the operating prevalence.",
+            "State the operating prevalence when reporting PPV/NPV.")
+
+    # H9 — an unmodelled clustering / repeated-measures key (a subject/cluster id that repeats,
+    # and is not the variable being analysed).
+    clustering = [str(c) for c in df.columns
+                  if str(c) not in exclude and _CLUSTER_RE.search(str(c))
+                  and bool(df[c].duplicated().any())]
+    if clustering:
+        add(CaveatSeverity.WARNING,
+            f"The key '{clustering[0]}' repeats across rows: observations are not independent "
+            "and naive tests understate standard errors.",
+            "A mixed-effects or GEE model is indicated (planned for v0.2.0).")
+    return out
+
+
 def build_report(
     profile: DataProfile,
     design: StudyDesign,
@@ -150,6 +248,9 @@ def build_report(
     graph: Optional[CausalGraph] = None,
 ) -> Report:
     graph = graph if graph is not None else CausalAnalyser().analyse(profile, design)
+    standard = design.reporting_standard or _reporting_standard(design, result)
+    if standard and standard != design.reporting_standard:
+        design = design.model_copy(update={"reporting_standard": standard})
     es = result.effect_size
     sig = "statistically significant" if result.is_significant else "not statistically significant"
     test_label = result.test_used.value.replace("_", " ").title()
@@ -171,6 +272,7 @@ def build_report(
         f"The effect size ({es.measure_name}) is reported with a 95% confidence interval "
         f"(analytic where available, otherwise a 1000-sample bootstrap). "
         f"Significance was evaluated at α = 0.05."
+        + (f" The write-up follows the {standard} reporting guideline." if standard else "")
     )
 
     plots: list[PlotSpec] = []
@@ -186,8 +288,10 @@ def build_report(
     if qq:
         plots.append(qq)
 
-    caveats = _build_caveats(profile, design, result, selection, outcome, group, predictor,
-                             df, graph)
+    exclude = {x for x in (outcome, group, predictor) if x}
+    caveats = (_build_caveats(profile, design, result, selection, outcome, group, predictor,
+                              df, graph)
+               + _healthcare_caveats(result, df, exclude))
     return Report(
         data_profile=profile,
         study_design=design,
