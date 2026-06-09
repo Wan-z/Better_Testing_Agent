@@ -1,9 +1,11 @@
-import { useState, useCallback } from 'react'
+import { useState, useCallback, useEffect } from 'react'
 import type {
   SessionStatus, VariableType, StudyDesign, DataProfile,
   Report, DialogueMessage, VariablesPayload,
 } from '../types/api'
 import { upload as apiUpload, setVariables as apiSetVariables, saveDesign as apiSaveDesign, getSession, dialogueTurn, runAnalysis as apiRunAnalysis } from '../api/client'
+
+const SESSION_STORAGE_KEY = 'hta_session_id'
 
 export interface SessionState {
   sessionId: string | null
@@ -41,11 +43,35 @@ export function useSession() {
   const update = useCallback((patch: Partial<SessionState>) =>
     setState(s => ({ ...s, ...patch })), [])
 
+  // Restore a COMPLETE session from localStorage on mount (avoids losing results on refresh).
+  useEffect(() => {
+    const savedId = localStorage.getItem(SESSION_STORAGE_KEY)
+    if (!savedId) return
+    getSession(savedId)
+      .then(session => {
+        if (session.status === 'COMPLETE' && session.report) {
+          update({
+            sessionId: savedId,
+            status: 'COMPLETE',
+            step: 5,
+            profile: session.profile ?? null,
+            studyDesign: session.design ?? null,
+            report: session.report,
+          })
+        } else {
+          // Incomplete or failed session — drop the stale reference.
+          localStorage.removeItem(SESSION_STORAGE_KEY)
+        }
+      })
+      .catch(() => localStorage.removeItem(SESSION_STORAGE_KEY))
+  }, [update])
+
   // Step 1 — upload CSV
   const upload = useCallback(async (file: File) => {
     update({ error: null })
     try {
       const res = await apiUpload(file)
+      localStorage.setItem(SESSION_STORAGE_KEY, res.session_id)
       update({
         sessionId: res.session_id,
         status: res.status,
@@ -138,7 +164,10 @@ export function useSession() {
     }
   }, [state.sessionId, update])
 
-  const reset = useCallback(() => setState(INITIAL), [])
+  const reset = useCallback(() => {
+    localStorage.removeItem(SESSION_STORAGE_KEY)
+    setState(INITIAL)
+  }, [])
 
   return { state, upload, setVariables, sendMessage, confirmDesign, runAnalysis, reset, update }
 }

@@ -1,7 +1,7 @@
 """Analysis run endpoint — SSE streaming pipeline execution.
 
 Dry-run mode streams the canned ``STUB_REPORT``; live mode runs the real pipeline:
-profile (already written by set_variables) → select test (playground.pipeline) →
+profile (already written by set_variables) → select test (hta.modules.selector) →
 execute (executor.py) → report (reporter.py).
 """
 
@@ -115,7 +115,8 @@ def _choose_predictor(df: pd.DataFrame, cols: dict, outcome: str,  # type: ignor
 
 async def _run_live(session_id: str) -> object:
     """Run the real pipeline and stream progress + the final report."""
-    from playground.pipeline import profile_column, select
+    from hta.modules.profiler import profile_column
+    from hta.modules.selector import select
 
     variables = json.loads(store.read(session_id, "variables.json"))
     outcome = variables.get("outcome_variable")
@@ -166,6 +167,54 @@ async def _run_live(session_id: str) -> object:
     store.write_json(session_id, "report.json", report)
     store.set_status(session_id, "COMPLETE")
     yield _sse({"type": "result", "report": report})
+
+
+@router.get("/sessions/{session_id}/preview-test")
+async def preview_test(session_id: str) -> dict[str, Any]:
+    """Return the test the selector would pick, without executing it.
+
+    Used by the Step 4 Review screen to show the planned test + rationale before the user
+    clicks Run, so they can go back and adjust variables if the selection looks wrong.
+    """
+    if not store.exists(session_id, "metadata.json"):
+        raise HTTPException(status_code=404, detail="Session not found.")
+    if not store.exists(session_id, "data.csv") or not store.exists(session_id, "variables.json"):
+        raise HTTPException(status_code=409,
+                            detail="Upload a CSV and set variables before previewing.")
+
+    if DRY_RUN:
+        return {
+            "test_name": "SPEARMAN_CORRELATION",
+            "rationale": "Dry-run mode: the stub dataset uses Spearman rank correlation.",
+            "caveats": [],
+        }
+
+    variables = json.loads(store.read(session_id, "variables.json"))
+    outcome = variables.get("outcome_variable", "")
+    group = variables.get("group_variable") or None
+    hypothesis = variables.get("hypothesis", "")
+
+    if not outcome:
+        raise HTTPException(status_code=409, detail="No outcome variable set.")
+
+    df = pd.read_csv(io.BytesIO(store.read(session_id, "data.csv")))
+    if outcome not in df.columns:
+        raise HTTPException(status_code=409,
+                            detail=f"Outcome column '{outcome}' not found in data.")
+
+    from hta.modules.profiler import profile_column
+    from hta.modules.selector import select
+
+    cols = {c: profile_column(c, df[c].astype(str).tolist()) for c in df.columns}
+    raw = {c: df[c].astype(str).tolist() for c in df.columns}
+    predictor = _choose_predictor(df, cols, outcome, group)
+    selection = select(cols, outcome, group, predictor, hypothesis, raw)
+
+    return {
+        "test_name": selection.test,
+        "rationale": selection.rationale,
+        "caveats": selection.caveats,
+    }
 
 
 @router.post("/sessions/{session_id}/run")

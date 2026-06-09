@@ -432,10 +432,6 @@ class CausalAnalyser:
 **Goal:** `src/hta/modules/selector.py` — purely deterministic decision tree.  
 **Files created:** `src/hta/modules/selector.py` ✅, `tests/test_selector.py` ✅
 
-> ⚠️ **Web-layer gap:** `web/backend/api/run.py` currently calls `playground.pipeline.select()`
-> in the live execution path rather than the canonical `TestSelector`. This should be switched to
-> use `src/hta/modules/selector.py` directly for consistency with the decision tree spec.
-
 **Files created:** `src/hta/modules/selector.py`, `tests/test_selector.py`
 
 ### `selector.py` — public API
@@ -872,9 +868,9 @@ Once all 8 steps pass (203/203 tests now passing — see status banner):
 
 ## What to do next (priority order)
 
-1. **Switch `run.py` to canonical selector** — `web/backend/api/run.py` calls
-   `playground.pipeline.select()` in the live path; replace with `src/hta/modules/selector.py`
-   so the full healthcare dispatch and BET prior are used.
+1. ~~**Switch `run.py` to canonical selector**~~ ✅ DONE — `playground.pipeline` was already a
+   re-export facade over `hta.modules.selector`; `run.py` now imports directly from
+   `hta.modules.selector` and `hta.modules.profiler` (no behaviour change, cleaner import chain).
 
 2. **`src/hta/modules/dialogue.py`** — build the standalone `DesignDialogue` engine class per the
    Step 4 spec so the agent pipeline is fully self-contained. Wire it into `agent.py`. Add

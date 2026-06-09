@@ -727,9 +727,8 @@ The website is built in three phases, each independently testable.
 - [x] `web/docker-compose.yml` + Dockerfiles
 - [x] Live mode: `web/backend/executor.py` + `web/backend/reporter.py` — thin adapters wrapping canonical engine
 
-> ⚠️ **Gap:** `run.py` live path calls `playground.pipeline.select()` rather than the canonical
-> `src/hta/modules/selector.py`. Should be switched so the full healthcare dispatch and BET prior
-> are used (see IMPLEMENTATION_PLAN.md "What to do next" item 1).
+> `run.py` now imports directly from `hta.modules.selector` and `hta.modules.profiler`
+> (`playground.pipeline` was a re-export facade — no behaviour change, cleaner imports). ✅
 
 **Gate:** Full dry-run pipeline accessible via `curl` with correct JSON responses. ✅
 
@@ -790,7 +789,7 @@ The website is built in three phases, each independently testable.
 
 | # | Item | Notes |
 |---|---|---|
-| 1 | Switch `run.py` to canonical `selector.py` | Remove `playground.pipeline.select()` dependency |
+| ~~1~~ | ~~Switch `run.py` to canonical `selector.py`~~ | ✅ Done — was already a re-export facade |
 | 2 | `localStorage` session restore | Show results on refresh for COMPLETE sessions |
 | 3 | `GET /api/sessions/{id}/preview-test` | Show planned test + rationale on Step 4 before Run |
 | 4 | Reconnect LLM dialogue to UI | Wire `StepDialogue.tsx` back to the SSE chat endpoint |

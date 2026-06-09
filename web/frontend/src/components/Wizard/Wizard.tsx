@@ -66,6 +66,7 @@ export default function Wizard() {
         )}
         {state.step === 4 && state.variables && state.studyDesign && (
           <StepReview
+            sessionId={state.sessionId}
             profile={state.profile}
             variables={state.variables}
             studyDesign={state.studyDesign}

@@ -76,6 +76,14 @@ export async function* runAnalysis(
   yield* sseStream(res)
 }
 
+export async function previewTest(
+  sessionId: string,
+): Promise<{ test_name: string; rationale: string; caveats: string[] }> {
+  const res = await fetch(`${BASE}/sessions/${sessionId}/preview-test`)
+  if (!res.ok) throw new Error(await res.text())
+  return res.json()
+}
+
 export function exportHtmlUrl(sessionId: string): string {
   return `${BASE}/sessions/${sessionId}/export/html`
 }

@@ -1,8 +1,23 @@
 import { PlayCircle, ArrowLeft } from 'lucide-react'
+import { useEffect, useState } from 'react'
 import type { DataProfile, StudyDesign, VariablesPayload } from '../../types/api'
 import PlotViewer from '../Results/PlotViewer'
+import { previewTest } from '../../api/client'
+
+const TEST_LABELS: Record<string, string> = {
+  WELCH_T: "Welch's t-test", INDEPENDENT_T: "Student's t-test",
+  PAIRED_T: 'Paired t-test', MANN_WHITNEY_U: 'Mann–Whitney U',
+  WILCOXON_SIGNED_RANK: 'Wilcoxon signed-rank', ONE_WAY_ANOVA: 'One-way ANOVA',
+  KRUSKAL_WALLIS: 'Kruskal–Wallis', CHI_SQUARED: 'Chi-squared',
+  FISHER_EXACT: "Fisher's exact", MCNEMAR: 'McNemar',
+  PEARSON_CORRELATION: 'Pearson correlation', SPEARMAN_CORRELATION: 'Spearman correlation',
+  MAXBET: 'MaxBET (nonlinear independence)', WELCH_ANOVA: "Welch's ANOVA",
+  POISSON_REGRESSION: 'Poisson regression', NEGATIVE_BINOMIAL_REGRESSION: 'Negative binomial regression',
+  LOG_RANK: 'Log-rank test', COX_REGRESSION: 'Cox proportional hazards', ROC_AUC: 'ROC / AUC',
+}
 
 interface Props {
+  sessionId: string | null
   profile: DataProfile | null
   variables: VariablesPayload
   studyDesign: StudyDesign
@@ -10,7 +25,17 @@ interface Props {
   onBack: () => void
 }
 
-export default function StepReview({ profile, variables, studyDesign, onRun, onBack }: Props) {
+export default function StepReview({ sessionId, profile, variables, studyDesign, onRun, onBack }: Props) {
+  const [plannedTest, setPlannedTest] = useState<{
+    test_name: string; rationale: string; caveats: string[]
+  } | null>(null)
+
+  useEffect(() => {
+    if (!sessionId) return
+    previewTest(sessionId)
+      .then(setPlannedTest)
+      .catch(() => { /* non-fatal — card just stays hidden */ })
+  }, [sessionId])
   const eda = profile?.eda_summary ?? null
   const edaPlots = profile?.eda_plots ?? []
   const hasEda = !!eda && edaPlots.length > 0
@@ -123,6 +148,24 @@ export default function StepReview({ profile, variables, studyDesign, onRun, onB
             </div>
           )}
         </div>
+
+        {/* Planned test */}
+        {plannedTest && plannedTest.test_name !== '—' && (
+          <div className="bg-white rounded-xl border border-slate-200 p-5">
+            <h3 className="text-sm font-semibold text-slate-700 mb-2">Planned test</h3>
+            <p className="font-semibold text-slate-900 mb-1">
+              {TEST_LABELS[plannedTest.test_name] ?? plannedTest.test_name}
+            </p>
+            <p className="text-sm text-slate-600">{plannedTest.rationale}</p>
+            {plannedTest.caveats.length > 0 && (
+              <div className="mt-2 space-y-1">
+                {plannedTest.caveats.map((c, i) => (
+                  <p key={i} className="text-xs text-amber-700 bg-amber-50 px-2 py-1 rounded">⚠ {c}</p>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
       </div>
 
       {/* ── Next steps: present the EDA result and ask how to proceed ──────── */}
