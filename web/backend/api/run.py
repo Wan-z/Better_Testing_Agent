@@ -25,7 +25,7 @@ from web.backend.reporter import build_report, enrich_prose_with_llm
 from web.backend.storage.local import LocalStorage
 from web.backend.stubs import STUB_REPORT
 
-# Make the statistical engine (`hta`, under src/) and `playground` importable for the
+# Make the statistical engine (`hta`, under src/) importable for the
 # function-level imports used inside the live pipeline below.
 _ROOT = Path(__file__).resolve().parents[3]
 for _p in (str(_ROOT / "src"), str(_ROOT)):

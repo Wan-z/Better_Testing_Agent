@@ -16,7 +16,7 @@ from fastapi import APIRouter, File, HTTPException, UploadFile
 from web.backend.schemas import BetScreenPayload, SessionResponse, UploadResponse, VariablesPayload
 from web.backend.storage.local import LocalStorage
 
-# Make the statistical engine (`hta`, under src/) and `playground` importable for the
+# Make the statistical engine (`hta`, under src/) importable for the
 # function-level imports used in the profiler below.
 _ROOT = Path(__file__).resolve().parents[3]
 for _p in (str(_ROOT / "src"), str(_ROOT)):
@@ -40,7 +40,7 @@ _MAX_REPORTED_FINDINGS = 50
 def _infer_types(df: pd.DataFrame) -> dict[str, str]:
     """Full VariableType inference via the engine's profiler (CONTINUOUS/ORDINAL/
     BINARY/CATEGORICAL/COUNT/IDENTIFIER), replacing the old 4-type heuristic."""
-    from playground.pipeline import profile_column
+    from hta.modules.profiler import profile_column
 
     return {
         col: profile_column(col, df[col].apply(str).tolist()).var_type
@@ -227,7 +227,7 @@ def _run_bet_for_columns(
     Returns eda_plots, eda_summary, and the list of numeric columns screened.
     Called from both the dedicated /bet-screen endpoint and as fallback from
     _build_profile when no pre-computed result exists."""
-    from playground.pipeline import profile_column as _pcol
+    from hta.modules.profiler import profile_column as _pcol
     from hta.modules.profiler import profile_with_screen
 
     numeric_types = ("CONTINUOUS", "ORDINAL", "COUNT")
