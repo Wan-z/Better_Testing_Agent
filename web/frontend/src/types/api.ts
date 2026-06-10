@@ -172,6 +172,14 @@ export interface Report {
   methods_text: string
 }
 
+// ── BET screen ────────────────────────────────────────────────────────────
+
+export interface BetScreenResponse {
+  eda_plots: PlotSpec[]
+  eda_summary: EdaSummary | null
+  numeric_columns: string[]
+}
+
 // ── API response shapes ───────────────────────────────────────────────────────
 
 export interface UploadResponse {

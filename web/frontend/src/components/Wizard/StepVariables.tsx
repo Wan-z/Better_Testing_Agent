@@ -86,7 +86,7 @@ export default function StepVariables({ columns, inferredTypes, preview, onNext 
       </div>
 
       {/* Variable pickers */}
-      <div className="grid sm:grid-cols-2 gap-5 mb-6">
+      <div className="grid sm:grid-cols-2 gap-5 mb-2">
         <div>
           <label className="block text-sm font-medium text-slate-700 mb-1.5">
             Outcome variable <span className="text-red-500">*</span>
@@ -101,17 +101,41 @@ export default function StepVariables({ columns, inferredTypes, preview, onNext 
           </select>
         </div>
         <div>
-          <label className="block text-sm font-medium text-slate-700 mb-1.5">Group / predictor variable</label>
+          <label className="block text-sm font-medium text-slate-700 mb-1.5">
+            Group variable
+            <span className="ml-1 text-xs font-normal text-slate-400">(categorical only)</span>
+          </label>
           <select
             value={group}
             onChange={e => setGroup(e.target.value)}
             className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-brand"
           >
-            <option value="__none__">No group variable — testing correlation</option>
+            <option value="__none__">None — run a correlation / regression</option>
             {columns.filter(c => c !== outcome).map(c => <option key={c} value={c}>{c}</option>)}
           </select>
         </div>
       </div>
+
+      {/* Group-variable validation warning */}
+      {group !== '__none__' && inferredTypes[group] === 'CONTINUOUS' && (
+        <div className="mb-5 p-3 bg-amber-50 border border-amber-200 rounded-lg text-sm text-amber-800">
+          <strong>Heads up:</strong> <em>{group}</em> is detected as <strong>CONTINUOUS</strong>.
+          Using a continuous variable as the group creates one group per unique value (potentially
+          thousands), which is almost never what you want. To test the <em>association</em> between
+          this variable and your outcome, leave Group as "None" — HTA will automatically run a
+          correlation or regression instead.
+        </div>
+      )}
+      {group !== '__none__' && inferredTypes[group] === 'COUNT' && (
+        <div className="mb-5 p-3 bg-amber-50 border border-amber-200 rounded-lg text-sm text-amber-800">
+          <strong>Heads up:</strong> <em>{group}</em> is detected as <strong>COUNT</strong>.
+          If it takes many unique values (e.g. a raw count column) you will get one group per
+          unique count. Consider leaving Group as "None" to run a correlation/regression,
+          unless this is a small discrete count (0–5 levels).
+        </div>
+      )}
+
+      <div className="mb-6" />
 
       {/* Hypothesis */}
       <div className="mb-3">

@@ -10,7 +10,7 @@ const SESSION_STORAGE_KEY = 'hta_session_id'
 export interface SessionState {
   sessionId: string | null
   status: SessionStatus | null
-  step: 1 | 2 | 3 | 4 | 5
+  step: 1 | 2 | 3 | 4 | 5 | 6
   // Step 1
   columns: string[]
   inferredTypes: Record<string, VariableType>
@@ -53,7 +53,7 @@ export function useSession() {
           update({
             sessionId: savedId,
             status: 'COMPLETE',
-            step: 5,
+            step: 6,
             profile: session.profile ?? null,
             studyDesign: session.design ?? null,
             report: session.report,
@@ -78,15 +78,15 @@ export function useSession() {
         columns: res.columns,
         inferredTypes: res.inferred_types,
         preview: res.preview,
-        step: 2,
+        step: 2,  // → BET Explore step
       })
     } catch (e) {
       update({ error: String(e) })
     }
   }, [update])
 
-  // Step 2 — set variables and hypothesis, then fetch the BET EDA profile so it is
-  // ready to show (and act on) at the Review step "when receiving the data".
+  // Step 3 — set variables and hypothesis, then fetch the full profile (which includes
+  // the pre-computed BET EDA if the user ran the Explore step).
   const setVariables = useCallback(async (payload: VariablesPayload) => {
     if (!state.sessionId) return
     await apiSetVariables(state.sessionId, payload)
@@ -95,7 +95,7 @@ export function useSession() {
       const s = await getSession(state.sessionId)
       profile = s.profile ?? null
     } catch { /* non-fatal — the EDA panel simply won't render */ }
-    update({ variables: payload, profile, step: 3 })
+    update({ variables: payload, profile, step: 4 })
   }, [state.sessionId, update])
 
   // Step 3 — one dialogue turn (streamed)
@@ -137,16 +137,16 @@ export function useSession() {
   }, [state, update])
 
   const confirmDesign = useCallback(async (design: StudyDesign) => {
-    update({ studyDesign: design, step: 4 })
+    update({ studyDesign: design, step: 5 })
     if (state.sessionId) {
       try { await apiSaveDesign(state.sessionId, design) } catch { /* non-fatal — run uses DEFAULT_DESIGN as fallback */ }
     }
   }, [state.sessionId, update])
 
-  // Step 4 — run analysis (streamed)
+  // Step 6 — run analysis (streamed)
   const runAnalysis = useCallback(async () => {
     if (!state.sessionId) return
-    update({ step: 5, status: 'RUNNING', progressMessage: 'Starting analysis…', progressStage: '', error: null })
+    update({ step: 6, status: 'RUNNING', progressMessage: 'Starting analysis…', progressStage: '', error: null })
 
     try {
       for await (const event of apiRunAnalysis(state.sessionId)) {

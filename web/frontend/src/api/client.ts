@@ -1,6 +1,6 @@
 // Real API client — all calls go to /api (proxied to FastAPI in dev).
 
-import type { SessionResponse, StudyDesign, UploadResponse, VariablesPayload } from '../types/api'
+import type { BetScreenResponse, SessionResponse, StudyDesign, UploadResponse, VariablesPayload } from '../types/api'
 
 const BASE = '/api'
 
@@ -51,6 +51,19 @@ export async function saveDesign(sessionId: string, design: StudyDesign): Promis
 
 export async function getSession(sessionId: string): Promise<SessionResponse> {
   const res = await fetch(`${BASE}/sessions/${sessionId}`)
+  if (!res.ok) throw new Error(await res.text())
+  return res.json()
+}
+
+export async function runBetScreen(
+  sessionId: string,
+  columns: string[] | null,
+): Promise<BetScreenResponse> {
+  const res = await fetch(`${BASE}/sessions/${sessionId}/bet-screen`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ columns }),
+  })
   if (!res.ok) throw new Error(await res.text())
   return res.json()
 }

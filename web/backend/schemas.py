@@ -32,6 +32,10 @@ class SessionResponse(BaseModel):
     report: Optional[dict[str, Any]] = None
 
 
+class BetScreenPayload(BaseModel):
+    columns: Optional[list[str]] = None  # None = all numeric columns
+
+
 class ErrorResponse(BaseModel):
     error: str
     message: str

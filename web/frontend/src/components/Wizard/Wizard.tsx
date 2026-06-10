@@ -1,12 +1,13 @@
 import { useNavigate } from 'react-router-dom'
 import { useSession } from '../../hooks/useSession'
 import StepUpload from './StepUpload'
+import StepBET from './StepBET'
 import StepVariables from './StepVariables'
 import StepDialogue from './StepDialogue'
 import StepReview from './StepReview'
 import StepResults from './StepResults'
 
-const STEP_LABELS = ['Upload', 'Variables', 'Design', 'Review', 'Results']
+const STEP_LABELS = ['Upload', 'Explore', 'Variables', 'Design', 'Review', 'Results']
 
 export default function Wizard() {
   const navigate = useNavigate()
@@ -20,13 +21,13 @@ export default function Wizard() {
         <button onClick={() => navigate('/')} className="font-semibold text-brand text-lg">HTA</button>
         <div className="flex items-center gap-2">
           {STEP_LABELS.map((label, i) => {
-            const stepNum = (i + 1) as 1 | 2 | 3 | 4 | 5
+            const stepNum = (i + 1) as 1 | 2 | 3 | 4 | 5 | 6
             const active = state.step === stepNum
             const done   = state.step > stepNum
             return (
               <div key={label} className="flex items-center gap-2">
-                {i > 0 && <div className="w-8 h-px bg-slate-200" />}
-                <div className={`flex items-center gap-1.5 text-xs font-medium px-3 py-1 rounded-full transition-colors ${
+                {i > 0 && <div className="w-6 h-px bg-slate-200" />}
+                <div className={`flex items-center gap-1.5 text-xs font-medium px-2.5 py-1 rounded-full transition-colors ${
                   active ? 'bg-brand text-white' :
                   done   ? 'bg-indigo-100 text-brand' :
                            'text-slate-400'
@@ -48,7 +49,15 @@ export default function Wizard() {
       {/* Step content */}
       <main className="max-w-5xl mx-auto px-4 py-10">
         {state.step === 1 && <StepUpload onUpload={session.upload} />}
-        {state.step === 2 && (
+        {state.step === 2 && state.sessionId && (
+          <StepBET
+            columns={state.columns}
+            inferredTypes={state.inferredTypes}
+            sessionId={state.sessionId}
+            onNext={() => session.update({ step: 3 })}
+          />
+        )}
+        {state.step === 3 && (
           <StepVariables
             columns={state.columns}
             inferredTypes={state.inferredTypes}
@@ -56,7 +65,7 @@ export default function Wizard() {
             onNext={session.setVariables}
           />
         )}
-        {state.step === 3 && (
+        {state.step === 4 && (
           <StepDialogue
             messages={state.messages}
             studyDesign={state.studyDesign}
@@ -64,17 +73,17 @@ export default function Wizard() {
             onConfirm={session.confirmDesign}
           />
         )}
-        {state.step === 4 && state.variables && state.studyDesign && (
+        {state.step === 5 && state.variables && state.studyDesign && (
           <StepReview
             sessionId={state.sessionId}
             profile={state.profile}
             variables={state.variables}
             studyDesign={state.studyDesign}
             onRun={session.runAnalysis}
-            onBack={() => session.update({ step: 2 })}
+            onBack={() => session.update({ step: 3 })}
           />
         )}
-        {state.step === 5 && (
+        {state.step === 6 && (
           <StepResults
             report={state.report}
             sessionId={state.sessionId}

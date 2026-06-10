@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import io
 import json
 import sys
@@ -12,7 +13,7 @@ from typing import Any
 import pandas as pd
 from fastapi import APIRouter, File, HTTPException, UploadFile
 
-from web.backend.schemas import SessionResponse, UploadResponse, VariablesPayload
+from web.backend.schemas import BetScreenPayload, SessionResponse, UploadResponse, VariablesPayload
 from web.backend.storage.local import LocalStorage
 
 # Make the statistical engine (`hta`, under src/) and `playground` importable for the
@@ -217,18 +218,73 @@ def _eda_plots_and_summary(
     return eda_plots, summary
 
 
-def _build_profile(df: pd.DataFrame, outcome: str | None, group: str | None) -> dict[str, Any]:
-    """Build a DataProfile dict via the canonical engine profiler (type inference + scipy
-    normality + the BET pairwise nonlinear-dependence screen), then attach the web's
-    Xiang-style EDA plots from the *same* screen context (so the screen runs only once)."""
+def _run_bet_for_columns(
+    df: pd.DataFrame,
+    selected_cols: list[str] | None,
+) -> dict[str, Any]:
+    """Run BET on a selected subset of numeric columns (or all if None).
+
+    Returns eda_plots, eda_summary, and the list of numeric columns screened.
+    Called from both the dedicated /bet-screen endpoint and as fallback from
+    _build_profile when no pre-computed result exists."""
+    from playground.pipeline import profile_column as _pcol
     from hta.modules.profiler import profile_with_screen
 
+    numeric_types = ("CONTINUOUS", "ORDINAL", "COUNT")
+    all_profiles = {c: _pcol(c, df[c].apply(str).tolist()) for c in df.columns}
+    numeric_names = [c for c in df.columns
+                     if all_profiles[c].var_type in numeric_types]
+
+    if selected_cols is not None:
+        sel_set = set(selected_cols)
+        numeric_names = [c for c in numeric_names if c in sel_set]
+
+    if len(numeric_names) < 2:
+        return {"eda_plots": [], "eda_summary": None, "numeric_columns": numeric_names}
+
+    sub_df = df[numeric_names].copy()
+    _, ctx = profile_with_screen(
+        sub_df, outcome=None, group=None,
+        max_screen_pairs=_MAX_SCREEN_PAIRS,
+        max_reported_findings=_MAX_REPORTED_FINDINGS)
+
+    if ctx is None:
+        return {"eda_plots": [], "eda_summary": None, "numeric_columns": numeric_names}
+
+    eda_plots, eda_summary = _eda_plots_and_summary(
+        sub_df, ctx.cols, ctx.aligned, ctx.numeric_columns, ctx.screen, group=None)
+
+    return {
+        "eda_plots": eda_plots,
+        "eda_summary": eda_summary,
+        "numeric_columns": numeric_names,
+    }
+
+
+def _build_profile(
+    df: pd.DataFrame,
+    outcome: str | None,
+    group: str | None,
+    precomputed_bet: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Build a DataProfile dict (type inference + scipy normality).
+
+    If precomputed_bet is provided (user ran the BET step earlier), BET is
+    skipped and the pre-computed eda_plots/eda_summary are attached directly.
+    Otherwise the full BET screen runs here (original behaviour)."""
+    from hta.modules.profiler import profile_with_screen
+
+    run_screen = precomputed_bet is None
     profile_model, ctx = profile_with_screen(
         df, outcome, group,
+        run_screen=run_screen,
         max_screen_pairs=_MAX_SCREEN_PAIRS, max_reported_findings=_MAX_REPORTED_FINDINGS)
     profile = profile_model.model_dump(mode="json")
 
-    if ctx is not None:
+    if precomputed_bet is not None:
+        profile["eda_plots"] = precomputed_bet.get("eda_plots", [])
+        profile["eda_summary"] = precomputed_bet.get("eda_summary")
+    elif ctx is not None:
         eda_plots, eda_summary = _eda_plots_and_summary(
             df, ctx.cols, ctx.aligned, ctx.numeric_columns, ctx.screen, group)
         profile["eda_plots"] = eda_plots
@@ -270,6 +326,28 @@ async def upload(file: UploadFile = File(...)) -> UploadResponse:
     )
 
 
+@router.post("/sessions/{session_id}/bet-screen")
+async def run_bet_screen(session_id: str, payload: BetScreenPayload) -> dict[str, Any]:
+    """Run the BET nonlinear-dependence screen on selected columns.
+
+    Stores the result as bet_screen.json so set_variables can reuse it instead
+    of re-running the (slow) screen a second time."""
+    if not store.exists(session_id, "metadata.json"):
+        raise HTTPException(status_code=404, detail="Session not found.")
+    if not store.exists(session_id, "data.csv"):
+        raise HTTPException(status_code=409, detail="No data uploaded yet.")
+
+    raw_csv = store.read(session_id, "data.csv")
+    df = pd.read_csv(io.BytesIO(raw_csv))
+
+    loop = asyncio.get_event_loop()
+    result = await loop.run_in_executor(
+        None, _run_bet_for_columns, df, payload.columns)
+
+    store.write_json(session_id, "bet_screen.json", result)
+    return result
+
+
 @router.patch("/sessions/{session_id}/variables")
 async def set_variables(session_id: str, payload: VariablesPayload) -> dict[str, str]:
     if not store.exists(session_id, "metadata.json"):
@@ -277,7 +355,17 @@ async def set_variables(session_id: str, payload: VariablesPayload) -> dict[str,
 
     raw_csv = store.read(session_id, "data.csv")
     df = pd.read_csv(io.BytesIO(raw_csv))
-    profile = _build_profile(df, payload.outcome_variable, payload.group_variable)
+
+    # Reuse pre-computed BET from the Explore step if the user ran it.
+    precomputed_bet: dict[str, Any] | None = None
+    if store.exists(session_id, "bet_screen.json"):
+        precomputed_bet = json.loads(store.read(session_id, "bet_screen.json"))
+
+    loop = asyncio.get_event_loop()
+    profile = await loop.run_in_executor(
+        None,
+        lambda: _build_profile(df, payload.outcome_variable, payload.group_variable,
+                                precomputed_bet))
 
     store.write_json(session_id, "variables.json", payload.model_dump())
     store.write_json(session_id, "profile.json", profile)
