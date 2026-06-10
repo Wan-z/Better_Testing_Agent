@@ -39,6 +39,9 @@ export default function StepVariables({ columns, inferredTypes, preview, onNext 
   const [hypothesis, setHypothesis] = useState('')
   const [loading, setLoading] = useState(false)
 
+  // Preview row count selector
+  const [previewRows, setPreviewRows] = useState(5)
+
   // Cell truncation state: Set of "rowIdx-colName" keys
   const [expandedCells, setExpandedCells] = useState<Set<string>>(new Set())
 
@@ -82,8 +85,24 @@ export default function StepVariables({ columns, inferredTypes, preview, onNext 
 
       {/* ── Data preview ─────────────────────────────────────────────────── */}
       <div className="mb-8 bg-white rounded-xl border border-slate-200 overflow-hidden">
-        <div className="px-4 py-3 border-b border-slate-100 bg-slate-50">
-          <p className="text-xs font-semibold text-slate-500 uppercase tracking-wide">Data preview (first 5 rows)</p>
+        <div className="px-4 py-3 border-b border-slate-100 bg-slate-50 flex items-center justify-between gap-4">
+          <p className="text-xs font-semibold text-slate-500 uppercase tracking-wide">Data preview</p>
+          <div className="flex items-center gap-2 text-xs text-slate-500">
+            <span>Rows:</span>
+            {[5, 10, 20, 50].map(n => (
+              <button
+                key={n}
+                onClick={() => setPreviewRows(n)}
+                className={`px-2 py-0.5 rounded transition-colors ${
+                  previewRows === n
+                    ? 'bg-brand text-white font-medium'
+                    : 'bg-slate-200 text-slate-600 hover:bg-slate-300'
+                }`}
+              >
+                {n}
+              </button>
+            ))}
+          </div>
         </div>
         <div className="overflow-x-auto">
           <table className="w-full text-sm">
@@ -100,7 +119,7 @@ export default function StepVariables({ columns, inferredTypes, preview, onNext 
               </tr>
             </thead>
             <tbody>
-              {preview.map((row, i) => (
+              {preview.slice(0, previewRows).map((row, i) => (
                 <tr key={i} className="border-b border-slate-50 hover:bg-slate-50">
                   {columns.map(col => {
                     const raw = String(row[col] ?? '')

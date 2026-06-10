@@ -308,7 +308,7 @@ async def upload(file: UploadFile = File(...)) -> UploadResponse:
     store.write(session_id, "data.csv", raw)
 
     inferred = _infer_types(df)
-    preview = df.head(10).fillna("").to_dict(orient="records")
+    preview = df.head(50).fillna("").to_dict(orient="records")
 
     store.write_json(session_id, "preview.json", {
         "columns": df.columns.tolist(),
