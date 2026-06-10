@@ -165,10 +165,12 @@ async def _run_live(session_id: str) -> object:
     _enrich_plots(report)
 
     # ── Step E: LLM prose enrichment ─────────────────────────────────────────
+    # Run the sync Anthropic/OpenAI call in a thread-pool executor so the event
+    # loop isn't blocked during the network round-trip (30 s timeout on the client).
     yield _sse({"type": "progress", "stage": "enriching_prose",
                 "message": "Generating plain-language summary…"})
-    await asyncio.sleep(0)
-    report = enrich_prose_with_llm(report)
+    loop = asyncio.get_event_loop()
+    report = await loop.run_in_executor(None, enrich_prose_with_llm, report)
 
     store.write_json(session_id, "report.json", report)
     store.set_status(session_id, "COMPLETE")

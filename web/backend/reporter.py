@@ -111,7 +111,7 @@ def enrich_prose_with_llm(report: dict[str, Any]) -> dict[str, Any]:
     try:
         if LLM_PROVIDER == "anthropic":
             import anthropic
-            client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
+            client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY, timeout=30.0)
             msg = client.messages.create(
                 model=ANTHROPIC_MODEL,
                 max_tokens=600,
@@ -120,7 +120,7 @@ def enrich_prose_with_llm(report: dict[str, Any]) -> dict[str, Any]:
             raw = msg.content[0].text
         else:
             from openai import OpenAI
-            client = OpenAI(api_key=OPENAI_API_KEY, base_url=OPENAI_BASE_URL)
+            client = OpenAI(api_key=OPENAI_API_KEY, base_url=OPENAI_BASE_URL, timeout=30.0)
             resp = client.chat.completions.create(
                 model=OPENAI_MODEL,
                 messages=[{"role": "user", "content": prompt}],
