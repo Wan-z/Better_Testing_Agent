@@ -53,9 +53,15 @@ export default function StepReview({ sessionId, profile, variables, studyDesign,
           <h3 className="text-sm font-semibold text-slate-700 mb-3">Data</h3>
           <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 text-sm">
             <div>
-              <p className="text-slate-500 text-xs">Outcome</p>
+              <p className="text-slate-500 text-xs">Primary variable</p>
               <p className="font-medium text-slate-800">{variables.outcome_variable}</p>
             </div>
+            {variables.predictor_variable && (
+              <div>
+                <p className="text-slate-500 text-xs">Predictor</p>
+                <p className="font-medium text-slate-800">{variables.predictor_variable}</p>
+              </div>
+            )}
             {variables.group_variable && (
               <div>
                 <p className="text-slate-500 text-xs">Group variable</p>

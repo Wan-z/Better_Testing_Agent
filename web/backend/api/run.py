@@ -137,7 +137,9 @@ async def _run_live(session_id: str) -> object:
 
     cols = {c: profile_column(c, df[c].apply(str).tolist()) for c in df.columns}
     raw = {c: df[c].apply(str).tolist() for c in df.columns}
-    predictor = _choose_predictor(df, cols, outcome, group)
+    # Use an explicitly chosen predictor when the user selected two variables;
+    # fall back to auto-selection (most BET-dependent numeric column).
+    predictor = (variables.get("predictor_variable") or None) or _choose_predictor(df, cols, outcome, group)
 
     # ── Step B: select test ───────────────────────────────────────────────────
     yield _sse({"type": "progress", "stage": "selecting_test",
@@ -215,7 +217,7 @@ async def preview_test(session_id: str) -> dict[str, Any]:
 
     cols = {c: profile_column(c, df[c].apply(str).tolist()) for c in df.columns}
     raw = {c: df[c].apply(str).tolist() for c in df.columns}
-    predictor = _choose_predictor(df, cols, outcome, group)
+    predictor = (variables.get("predictor_variable") or None) or _choose_predictor(df, cols, outcome, group)
     selection = select(cols, outcome, group, predictor, hypothesis, raw)
 
     return {

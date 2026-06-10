@@ -16,6 +16,7 @@ class UploadResponse(BaseModel):
 
 class VariablesPayload(BaseModel):
     outcome_variable: str
+    predictor_variable: Optional[str] = None  # explicit predictor; overrides auto-selection
     group_variable: Optional[str] = None
     hypothesis: str
 

@@ -200,6 +200,7 @@ export interface SessionResponse {
 
 export interface VariablesPayload {
   outcome_variable: string
+  predictor_variable?: string
   group_variable?: string
   hypothesis: string
 }
