@@ -46,7 +46,12 @@ export default function PlotViewer({ plots }: Props) {
           margin: { t: 20, r: 20, b: 50, l: 55 },
           height: 340,
         }}
-        config={{ responsive: true, displayModeBar: false }}
+        config={{
+          responsive: true,
+          displayModeBar: 'hover',
+          modeBarButtonsToRemove: ['toImage', 'sendDataToCloud', 'lasso2d', 'select2d'] as Plotly.ModeBarDefaultButtons[],
+          doubleClick: 'reset+autosize',
+        }}
         style={{ width: '100%' }}
       />
     </div>
