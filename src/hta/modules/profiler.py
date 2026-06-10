@@ -130,6 +130,10 @@ def profile_column(name: str, raw: list[str]) -> Column:
             col.nonnormality = severity(sk, ku)
         if sd == 0:
             col.notes.append("constant (zero variance)")
+        else:
+            n_out = sum(1 for x in vals if abs((x - mean) / sd) > 3.5)
+            if n_out:
+                col.notes.append(f"{n_out} outlier(s) detected (|Z| > 3.5)")
     else:
         col.categories = uniq[:12]
         col.var_type = "BINARY" if len(uniq) == 2 else "CATEGORICAL"

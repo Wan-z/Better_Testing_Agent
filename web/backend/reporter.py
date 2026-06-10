@@ -29,6 +29,12 @@ from hta.models.design import (  # noqa: E402
 from hta.models.test import TestResult  # noqa: E402
 from hta.modules.reporter import build_report as _build_report  # noqa: E402
 
+from web.backend.config import (  # noqa: E402
+    DRY_RUN, LLM_PROVIDER,
+    ANTHROPIC_API_KEY, ANTHROPIC_MODEL,
+    OPENAI_API_KEY, OPENAI_BASE_URL, OPENAI_MODEL,
+)
+
 
 def _default_design() -> StudyDesign:
     return StudyDesign(
@@ -65,6 +71,74 @@ def _degenerate_report(profile: dict[str, Any], design: dict[str, Any],
         "methods_text": msg,
     }
     _attach_eda(report, profile)
+    return report
+
+
+def enrich_prose_with_llm(report: dict[str, Any]) -> dict[str, Any]:
+    """Replace the deterministic report prose with a live LLM-generated version.
+
+    Calls the configured LLM provider to rewrite `plain_language_summary` and
+    `methods_text`. Falls back silently to the deterministic text on any error so
+    the pipeline is never blocked by an LLM failure. No-ops in dry-run mode.
+    """
+    if DRY_RUN:
+        return report
+
+    tr = report.get("test_result", {})
+    es = tr.get("effect_size", {})
+
+    def _fmt(v: Any, decimals: int = 3) -> str:
+        try:
+            return f"{float(v):.{decimals}g}"
+        except (TypeError, ValueError):
+            return str(v)
+
+    prompt = (
+        f"A statistical test ({str(tr.get('test_used', '?')).replace('_', ' ')}) produced:\n"
+        f"  p = {_fmt(tr.get('p_value'))},  "
+        f"{es.get('measure_name', 'effect')} = {_fmt(es.get('value'))} "
+        f"({es.get('interpretation', '')}, "
+        f"95% CI [{_fmt(es.get('ci_lower'))}, {_fmt(es.get('ci_upper'))}]).\n"
+        f"  Significant at α = 0.05: {'yes' if tr.get('is_significant') else 'no'}.\n\n"
+        f"Existing plain-language summary (deterministic):\n{report.get('plain_language_summary', '')}\n\n"
+        f"Existing methods text (deterministic):\n{report.get('methods_text', '')}\n\n"
+        "Rewrite both for a research paper. Return ONLY valid JSON with keys "
+        '"plain" (2–3 sentences, non-statistician audience, lead with the key finding) '
+        'and "methods" (3–5 sentences, passive voice, journal style). '
+        "No markdown, no extra keys."
+    )
+
+    try:
+        if LLM_PROVIDER == "anthropic":
+            import anthropic
+            client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
+            msg = client.messages.create(
+                model=ANTHROPIC_MODEL,
+                max_tokens=600,
+                messages=[{"role": "user", "content": prompt}],
+            )
+            raw = msg.content[0].text
+        else:
+            from openai import OpenAI
+            client = OpenAI(api_key=OPENAI_API_KEY, base_url=OPENAI_BASE_URL)
+            resp = client.chat.completions.create(
+                model=OPENAI_MODEL,
+                messages=[{"role": "user", "content": prompt}],
+                max_completion_tokens=600,
+            )
+            raw = resp.choices[0].message.content or ""
+
+        import json as _json
+        # Strip optional code-fence wrappers that some models emit.
+        clean = raw.strip().removeprefix("```json").removeprefix("```").removesuffix("```").strip()
+        parsed = _json.loads(clean)
+        if parsed.get("plain"):
+            report["plain_language_summary"] = parsed["plain"]
+        if parsed.get("methods"):
+            report["methods_text"] = parsed["methods"]
+    except Exception:
+        pass  # Deterministic text is already in the report — do not surface LLM errors.
+
     return report
 
 

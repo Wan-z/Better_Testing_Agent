@@ -13,11 +13,13 @@ Upload CSV → Select variables → Design form → Review (BET EDA) → Statist
 
 A structured design form captures study-design information (experimental vs observational,
 measurement type, randomisation, confounders, relationship form). The full pipeline streams
-results in real time and exports a self-contained HTML report. An LLM-based conversational
-dialogue backend (`POST /api/sessions/{id}/dialogue`) is also implemented and available for
-integration, but the current web UI uses the structured form.
+results in real time and exports a self-contained HTML report. An LLM-based conversational dialogue (`POST /api/sessions/{id}/dialogue`) elicits study
+design information in up to 3 questions per turn and calls a `capture_study_design` tool
+when it has enough information. When BET detects mixture-type nonlinear dependence the
+dialogue automatically asks about latent subgroups before locking the design (Rule 8).
+The current web UI uses a structured form; the dialogue is available via the REST API.
 
-> **Implementation status (2026-06-09):** All core modules are complete and 203/203 tests pass.
+> **Implementation status (2026-06-10):** All core modules are complete and 204/204 tests pass.
 > The full web pipeline is live end-to-end (upload → design → BET EDA review → execute → report → HTML export).
 > See [IMPLEMENTATION_PLAN.md](IMPLEMENTATION_PLAN.md) and [WEBSITE_DESIGN.md](WEBSITE_DESIGN.md) for
 > remaining gaps.
@@ -105,7 +107,8 @@ nonlinear gene pair created by a cancer-subtype mixture, with the joint-classifi
 - Python ≥ 3.11
 - Node.js ≥ 20 (web frontend only)
 - An LLM API key — either **Anthropic** (Claude) or **OpenAI / Azure OpenAI** — for the
-  plain-language summary and methods text in live mode. Not required in dry-run mode.
+  plain-language summary, methods text, and study-design dialogue in live mode.
+  Not required in dry-run mode (deterministic stub output is produced instead).
 
 ## Installation
 
@@ -166,7 +169,7 @@ dependence region drawn out. Click a sample link (stars / gene / overdose) to st
 See [`playground/README.md`](playground/README.md). *(In this zero-dependency playground, group comparisons are recommended rather than
 executed; the full executor — scipy / statsmodels — runs in the `hta run` CLI and the web app.)*
 
-## Running the full web app (FastAPI + React, stubbed pipeline)
+## Running the full web app (FastAPI + React)
 
 ```bash
 # Terminal 1 — FastAPI backend (port 8000)
@@ -208,11 +211,10 @@ mypy src/hta           # type checking
 ```
 src/hta/
   models/           Shared Pydantic data models
-  bus.py            Pub/sub event bus
   bet_screen.py     BET pairwise nonlinear-dependence EDA engine (pure stdlib)
   modules/          DataProfiler, DesignDialogue, TestSelector, TestExecutor, Reporter
   agent.py          Top-level orchestrator
-  cli.py            Typer CLI
+  cli.py            Typer CLI (`hta run --data … --hypothesis … --outcome … [--design-json design.json]`)
 web/
   backend/
     api/            FastAPI routers (sessions, dialogue, run, export)

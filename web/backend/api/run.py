@@ -21,7 +21,7 @@ from fastapi.responses import StreamingResponse
 from web.backend.config import DRY_RUN
 from web.backend.executor import execute
 from web.backend.plots import plotspec_to_plotly
-from web.backend.reporter import build_report
+from web.backend.reporter import build_report, enrich_prose_with_llm
 from web.backend.storage.local import LocalStorage
 from web.backend.stubs import STUB_REPORT
 
@@ -163,6 +163,12 @@ async def _run_live(session_id: str) -> object:
     report = build_report(profile, design, test_result, selection, df,
                           outcome, group, predictor, hypothesis)
     _enrich_plots(report)
+
+    # ── Step E: LLM prose enrichment ─────────────────────────────────────────
+    yield _sse({"type": "progress", "stage": "enriching_prose",
+                "message": "Generating plain-language summary…"})
+    await asyncio.sleep(0)
+    report = enrich_prose_with_llm(report)
 
     store.write_json(session_id, "report.json", report)
     store.set_status(session_id, "COMPLETE")

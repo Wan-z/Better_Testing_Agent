@@ -42,15 +42,33 @@ async def _stream_dry_run(session_id: str, turn: int) -> object:
         yield _sse({"type": "done", "is_complete": False})
 
 
-SYSTEM = (
-    "You are a statistical study design expert. Ask up to 3 questions per turn to "
-    "elicit: (1) experimental vs observational design, (2) independence of observations, "
-    "(3) potential confounders, (4) relationship form (linear/monotone/nonlinear) if "
-    "both variables are continuous. When you have enough information call the "
-    "capture_study_design tool."
-)
+def _system_prompt(subtype_suggestive: bool = False) -> str:
+    """Build the dialogue system prompt, injecting a BET subgroup hint when warranted.
 
-TOOL_SCHEMA = {
+    Rule 8 (TECHNICAL_REPORT §6): if BET detected mixture-type nonlinear dependence,
+    ask the researcher whether they suspect a latent subgroup/subtype before locking
+    the design — that answer is captured as `subgroup_structure_suspected`.
+    """
+    base = (
+        "You are a statistical study design expert. Ask up to 3 questions per turn to "
+        "elicit: (1) experimental vs observational design, (2) independence of observations, "
+        "(3) potential confounders, (4) relationship form (linear/monotone/nonlinear) if "
+        "both variables are continuous, (5) whether a latent subgroup or subtype is "
+        "suspected to drive the pattern. When you have enough information call the "
+        "capture_study_design tool."
+    )
+    if subtype_suggestive:
+        base += (
+            "\n\nIMPORTANT: The BET nonlinear-dependence screen flagged mixture-type patterns "
+            "in this dataset — shapes (bimodal, checkerboard, parabolic) that often arise from "
+            "an unmodelled subgroup or biological subtype. Before recording the design, ask the "
+            "researcher whether they suspect such a latent subgroup is present and whether a "
+            "stratified analysis within subgroups is warranted."
+        )
+    return base
+
+
+TOOL_SCHEMA: dict = {
     "name": "capture_study_design",
     "description": "Record the fully-elicited study design.",
     "properties": {
@@ -59,6 +77,14 @@ TOOL_SCHEMA = {
         "is_randomized": {"type": "boolean"},
         "relationship_form": {"type": "string", "enum": ["linear", "monotone", "nonlinear", "unknown"]},
         "confounder_names": {"type": "array", "items": {"type": "string"}},
+        "subgroup_structure_suspected": {
+            "type": "boolean",
+            "description": (
+                "True if the researcher suspects a latent subgroup or subtype drives "
+                "the observed dependence pattern (relevant when BET finds mixture-type "
+                "nonlinear shapes)."
+            ),
+        },
     },
     "required": ["design_type", "measurement_type", "is_randomized"],
 }
@@ -71,26 +97,31 @@ def _build_design(args: dict) -> dict:  # type: ignore[type-arg]
         for n in args.get("confounder_names", [])
     ]
     form = args.get("relationship_form", "unknown")
+    notes: list[str] = [form] if form not in ("linear", "unknown") else []
+    if args.get("subgroup_structure_suspected"):
+        notes.append("subgroup_structure_suspected")
     return {
         "design_type": args["design_type"],
         "measurement_type": args["measurement_type"],
         "is_randomized": args["is_randomized"],
         "confounders": confounders,
-        "notes": [form] if form not in ("linear", "unknown") else [],
+        "notes": notes,
     }
 
 
-async def _stream_live(session_id: str, history: list[dict[str, str]]) -> object:  # type: ignore[return]
+async def _stream_live(session_id: str, history: list[dict[str, str]],  # type: ignore[return]
+                       system: str) -> object:
     """Yield SSE chunks — routes to Anthropic or OpenAI based on LLM_PROVIDER."""
     if LLM_PROVIDER == "anthropic":
-        async for chunk in _stream_anthropic(session_id, history):
+        async for chunk in _stream_anthropic(session_id, history, system):
             yield chunk
     else:
-        async for chunk in _stream_openai(session_id, history):
+        async for chunk in _stream_openai(session_id, history, system):
             yield chunk
 
 
-async def _stream_anthropic(session_id: str, history: list[dict[str, str]]) -> object:  # type: ignore[return]
+async def _stream_anthropic(session_id: str, history: list[dict[str, str]],  # type: ignore[return]
+                             system: str) -> object:
     import anthropic
 
     client = anthropic.AsyncAnthropic(api_key=ANTHROPIC_API_KEY)
@@ -111,7 +142,7 @@ async def _stream_anthropic(session_id: str, history: list[dict[str, str]]) -> o
 
     async with client.messages.stream(
         model=ANTHROPIC_MODEL,
-        system=SYSTEM,
+        system=system,
         messages=history,  # type: ignore[arg-type]
         tools=tools,
         max_tokens=512,
@@ -137,7 +168,8 @@ async def _stream_anthropic(session_id: str, history: list[dict[str, str]]) -> o
         yield _sse({"type": "done", "is_complete": False})
 
 
-async def _stream_openai(session_id: str, history: list[dict[str, str]]) -> object:  # type: ignore[return]
+async def _stream_openai(session_id: str, history: list[dict[str, str]],  # type: ignore[return]
+                         system: str) -> object:
     from openai import AsyncOpenAI
 
     client = AsyncOpenAI(api_key=OPENAI_API_KEY, base_url=OPENAI_BASE_URL)
@@ -161,7 +193,7 @@ async def _stream_openai(session_id: str, history: list[dict[str, str]]) -> obje
 
     stream = await client.chat.completions.create(
         model=OPENAI_MODEL,
-        messages=[{"role": "system", "content": SYSTEM}] + history,  # type: ignore[arg-type]
+        messages=[{"role": "system", "content": system}] + history,  # type: ignore[arg-type]
         tools=tools,  # type: ignore[arg-type]
         stream=True,
         max_completion_tokens=512,
@@ -211,6 +243,15 @@ async def dialogue(session_id: str, payload: DialoguePayload) -> StreamingRespon
             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
         )
 
+    # Rule 8: inject BET subgroup hint into the system prompt when the profile shows
+    # mixture-type nonlinear dependence (subtype_suggestive flag set by the profiler).
+    subtype_suggestive = False
+    if store.exists(session_id, "profile.json"):
+        p = json.loads(store.read(session_id, "profile.json"))
+        subtype_suggestive = bool((p.get("eda_summary") or {}).get("subtype_suggestive", False))
+
+    system = _system_prompt(subtype_suggestive)
+
     # Build message history from stored dialogue
     history_path = "dialogue_history.json"
     history: list[dict[str, str]] = []
@@ -223,7 +264,7 @@ async def dialogue(session_id: str, payload: DialoguePayload) -> StreamingRespon
     store.write_json(session_id, history_path, history)
 
     return StreamingResponse(
-        _stream_live(session_id, history),
+        _stream_live(session_id, history, system),
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )

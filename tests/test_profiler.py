@@ -83,6 +83,17 @@ def test_too_few_numeric_columns_no_screen() -> None:
     assert profile.nonlinear_dependencies == []
 
 
+def test_outlier_detection() -> None:
+    # 20 normal values plus one extreme outlier that should trigger the Z > 3.5 flag.
+    vals = [str(float(i)) for i in range(20)] + ["1000.0"]
+    col = profile_column("x", vals)
+    assert any("|Z| > 3.5" in n for n in col.notes)
+
+    # Tightly clustered data → no outlier flag.
+    col2 = profile_column("y", [str(1.0 + 0.01 * i) for i in range(20)])
+    assert not any("|Z| > 3.5" in n for n in col2.notes)
+
+
 def test_time_to_event_detection() -> None:
     tte = profile_column("survival_time", [f"{1.0 + i * 0.7:.2f}" for i in range(30)])
     assert tte.var_type == "TIME_TO_EVENT"

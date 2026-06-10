@@ -86,15 +86,34 @@ def run(
     group: Optional[str] = typer.Option(None, "--group", help="Grouping variable (comparison)."),
     predictor: Optional[str] = typer.Option(None, "--predictor",
                                             help="Predictor variable (association)."),
+    design_json: Optional[Path] = typer.Option(
+        None, "--design-json", exists=True, dir_okay=False,
+        help=(
+            "Path to a study design JSON file (e.g. exported from a previous web-app session). "
+            "When omitted a default observational design is assumed. "
+            "The interactive dialogue is available only via the web app."
+        ),
+    ),
     dry_run: bool = typer.Option(False, "--dry-run", help="Run without any LLM API calls."),
 ) -> None:
     """Profile the data, select and run the appropriate test, and print a report."""
+    import json
     import pandas as pd
+
+    from hta.models.design import StudyDesign
+
+    design = None
+    if design_json is not None:
+        try:
+            design = StudyDesign.model_validate(json.loads(design_json.read_text()))
+        except Exception as exc:
+            console.print(f"[red]Error loading design JSON:[/red] {exc}")
+            raise typer.Exit(code=1)
 
     agent = HypothesisTestingAgent(dry_run=dry_run)
     try:
         df = pd.read_csv(data)
-        report = agent.run(df, hypothesis, outcome, group, predictor)
+        report = agent.run(df, hypothesis, outcome, group, predictor, design=design)
     except Exception as exc:
         console.print(f"[red]Error:[/red] {exc}")
         raise typer.Exit(code=1)
