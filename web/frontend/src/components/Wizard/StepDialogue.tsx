@@ -1,16 +1,224 @@
-import { useState } from 'react'
-import { ArrowRight, X, Plus } from 'lucide-react'
-import type { StudyDesign, StudyDesignType, MeasurementType, Confounder } from '../../types/api'
+import { useEffect, useRef, useState } from 'react'
+import { ArrowRight, X, Plus, Send } from 'lucide-react'
+import type {
+  StudyDesign, StudyDesignType, MeasurementType, Confounder,
+  DialogueMessage, EdaSummary,
+} from '../../types/api'
+import { previewTest } from '../../api/client'
 
 interface Props {
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  messages: any[]            // kept for interface compatibility
+  sessionId: string | null
+  messages: DialogueMessage[]
   studyDesign: StudyDesign | null
-  onSend: (msg: string) => Promise<void>   // kept for interface compatibility
+  edaSummary?: EdaSummary | null
+  onSend: (msg: string) => Promise<{ tokens: number; isComplete: boolean }>
   onConfirm: (design: StudyDesign) => void | Promise<void>
 }
 
-// ── Option card ────────────────────────────────────────────────────────────────
+const DESIGN_TYPE_OPTIONS: [StudyDesignType, string][] = [
+  ['EXPERIMENTAL', 'Experimental'],
+  ['OBSERVATIONAL', 'Observational'],
+  ['QUASI_EXPERIMENTAL', 'Quasi-experimental'],
+]
+
+const MEASUREMENT_OPTIONS: [MeasurementType, string][] = [
+  ['BETWEEN_SUBJECTS', 'Independent (between subjects)'],
+  ['WITHIN_SUBJECTS', 'Repeated / paired (within subjects)'],
+  ['MIXED', 'Mixed / clustered'],
+]
+
+// The '__init__' prefix marks the dialogue opener: useSession hides it from the
+// visible chat and strips the prefix before sending, so only the framing + BET
+// context below is stored as the first user turn.
+function buildInitMessage(eda?: EdaSummary | null): string {
+  const lines = [
+    '__init__',
+    'I have uploaded my dataset and selected my variables. Please interview me about the study design.',
+  ]
+  if (eda) {
+    lines.push('', `Context from the automated BET dependence screen: ${eda.text}`)
+    if (eda.top_pairs.length > 0) {
+      lines.push('Top dependent pairs: ' + eda.top_pairs.map(p =>
+        `${p.x} × ${p.y} (${p.form.toLowerCase()}, z = ${p.bet_z.toFixed(1)}${p.significant ? '' : ', n.s.'})`,
+      ).join('; ') + '.')
+    }
+    lines.push(`Pairs with significant dependence: ${eda.n_significant}.`)
+    if (eda.subtype_suggestive) {
+      lines.push(
+        'The screen flagged mixture-type shapes that often arise from a latent subgroup — '
+        + 'please ask me whether a subgroup or subtype could drive the pattern, and use the '
+        + 'detected forms to pre-fill the expected relationship form.',
+      )
+    }
+  }
+  return lines.join('\n')
+}
+
+// ── Chat pieces ────────────────────────────────────────────────────────────────
+
+function ChatBubble({ role, content }: DialogueMessage) {
+  const isUser = role === 'user'
+  return (
+    <div className={`flex ${isUser ? 'justify-end' : 'justify-start'}`}>
+      <div className={`max-w-[85%] px-3.5 py-2.5 rounded-2xl text-sm whitespace-pre-wrap leading-relaxed ${
+        isUser ? 'bg-brand text-white rounded-br-md' : 'bg-slate-100 text-slate-800 rounded-bl-md'
+      }`}>
+        {content}
+      </div>
+    </div>
+  )
+}
+
+function TypingIndicator() {
+  return (
+    <div className="flex justify-start">
+      <div className="bg-slate-100 rounded-2xl rounded-bl-md px-4 py-3 flex items-center gap-1">
+        {[0, 150, 300].map(delay => (
+          <span
+            key={delay}
+            className="w-1.5 h-1.5 bg-slate-400 rounded-full animate-bounce"
+            style={{ animationDelay: `${delay}ms` }}
+          />
+        ))}
+      </div>
+    </div>
+  )
+}
+
+// ── Editable design summary (right panel) ──────────────────────────────────────
+
+function ChipEditor({ items, onAdd, onRemove, placeholder }: {
+  items: string[]
+  onAdd: (value: string) => void
+  onRemove: (value: string) => void
+  placeholder: string
+}) {
+  const [value, setValue] = useState('')
+  const add = () => {
+    const v = value.trim()
+    if (v) onAdd(v)
+    setValue('')
+  }
+  return (
+    <div>
+      {items.length > 0 && (
+        <div className="flex flex-wrap gap-1.5 mb-2">
+          {items.map(item => (
+            <span key={item} className="flex items-center gap-1 px-2.5 py-1 bg-indigo-50 text-brand text-xs font-medium rounded-full border border-indigo-200">
+              {item}
+              <button onClick={() => onRemove(item)} className="hover:text-indigo-800">
+                <X size={11} />
+              </button>
+            </span>
+          ))}
+        </div>
+      )}
+      <div className="flex gap-1.5">
+        <input
+          value={value}
+          onChange={e => setValue(e.target.value)}
+          onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); add() } }}
+          placeholder={placeholder}
+          className="flex-1 border border-slate-200 rounded-lg px-2.5 py-1.5 text-xs focus:outline-none focus:ring-2 focus:ring-brand"
+        />
+        <button
+          onClick={add}
+          disabled={!value.trim()}
+          className="p-1.5 bg-slate-100 text-slate-600 rounded-lg hover:bg-slate-200 transition-colors disabled:opacity-40"
+        >
+          <Plus size={14} />
+        </button>
+      </div>
+    </div>
+  )
+}
+
+function Field({ label, children }: { label: string; children: React.ReactNode }) {
+  return (
+    <div>
+      <p className="text-xs text-slate-500 mb-1">{label}</p>
+      {children}
+    </div>
+  )
+}
+
+const SELECT_CLS = 'w-full border border-slate-200 rounded-lg px-2.5 py-2 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-brand'
+
+function EditableDesignCard({ draft, onChange, onConfirm }: {
+  draft: StudyDesign
+  onChange: (d: StudyDesign) => void
+  onConfirm: () => void | Promise<void>
+}) {
+  const addConfounder = (name: string) => {
+    if (draft.confounders.some(c => c.name === name)) return
+    const confounder: Confounder = {
+      name, role: 'CONFOUNDER', is_measured: true,
+      adjustment_recommended: true, rationale: 'Added by the researcher at review',
+    }
+    onChange({ ...draft, confounders: [...draft.confounders, confounder] })
+  }
+
+  return (
+    <div className="bg-white rounded-2xl border border-indigo-200 shadow-sm p-5">
+      <p className="text-xs font-semibold text-brand uppercase tracking-wide mb-1">Design captured</p>
+      <p className="text-xs text-slate-400 mb-4">Check each field — correct anything the assistant misread.</p>
+      <div className="space-y-4">
+        <Field label="Design type">
+          <select
+            value={draft.design_type}
+            onChange={e => onChange({ ...draft, design_type: e.target.value as StudyDesignType })}
+            className={SELECT_CLS}
+          >
+            {DESIGN_TYPE_OPTIONS.map(([value, label]) => <option key={value} value={value}>{label}</option>)}
+          </select>
+        </Field>
+        <Field label="Measurement">
+          <select
+            value={draft.measurement_type}
+            onChange={e => onChange({ ...draft, measurement_type: e.target.value as MeasurementType })}
+            className={SELECT_CLS}
+          >
+            {MEASUREMENT_OPTIONS.map(([value, label]) => <option key={value} value={value}>{label}</option>)}
+          </select>
+        </Field>
+        <Field label="Randomised">
+          <select
+            value={draft.is_randomized ? 'yes' : 'no'}
+            onChange={e => onChange({ ...draft, is_randomized: e.target.value === 'yes' })}
+            className={SELECT_CLS}
+          >
+            <option value="yes">Yes</option>
+            <option value="no">No</option>
+          </select>
+        </Field>
+        <Field label="Confounders">
+          <ChipEditor
+            items={draft.confounders.map(c => c.name)}
+            onAdd={addConfounder}
+            onRemove={name => onChange({ ...draft, confounders: draft.confounders.filter(c => c.name !== name) })}
+            placeholder="Add confounder…"
+          />
+        </Field>
+        <Field label="Notes">
+          <ChipEditor
+            items={draft.notes}
+            onAdd={note => { if (!draft.notes.includes(note)) onChange({ ...draft, notes: [...draft.notes, note] }) }}
+            onRemove={note => onChange({ ...draft, notes: draft.notes.filter(n => n !== note) })}
+            placeholder="Add note…"
+          />
+        </Field>
+      </div>
+      <button
+        onClick={() => void onConfirm()}
+        className="mt-5 w-full flex items-center justify-center gap-2 px-4 py-3 bg-brand text-white rounded-xl text-sm font-semibold hover:bg-brand-dark transition-colors"
+      >
+        Confirm design <ArrowRight size={15} />
+      </button>
+    </div>
+  )
+}
+
+// ── Static form fallback (kept for dry-run / no-LLM deployments) ───────────────
 
 function OptionCard({
   label, description, selected, onClick,
@@ -35,8 +243,6 @@ function OptionCard({
   )
 }
 
-// ── Question block ─────────────────────────────────────────────────────────────
-
 function Question({ number, label, children, visible }: {
   number: number
   label: string
@@ -57,11 +263,9 @@ function Question({ number, label, children, visible }: {
   )
 }
 
-// ── Main component ─────────────────────────────────────────────────────────────
-
 type RelationshipForm = 'linear' | 'monotone' | 'nonlinear' | 'unknown'
 
-export default function StepDialogue({ studyDesign, onConfirm }: Props) {
+function DesignForm({ onConfirm }: { onConfirm: (design: StudyDesign) => void | Promise<void> }) {
   const [designType, setDesignType]         = useState<StudyDesignType | null>(null)
   const [measurementType, setMeasurementType] = useState<MeasurementType | null>(null)
   const [isRandomized, setIsRandomized]     = useState<boolean | null>(null)
@@ -103,41 +307,8 @@ export default function StepDialogue({ studyDesign, onConfirm }: Props) {
     }
   }
 
-  if (studyDesign) {
-    // Already confirmed — show read-only summary
-    return (
-      <div className="max-w-xl mx-auto">
-        <h2 className="text-2xl font-bold text-slate-900 mb-2">Study design</h2>
-        <div className="bg-white rounded-2xl border border-indigo-200 shadow-sm p-6">
-          <p className="text-xs font-semibold text-brand uppercase tracking-wide mb-4">Design captured</p>
-          <dl className="space-y-3 text-sm">
-            {[
-              ['Design type', studyDesign.design_type.replace('_', ' ')],
-              ['Measurement', studyDesign.measurement_type.replace('_', ' ')],
-              ['Randomised', studyDesign.is_randomized ? 'Yes' : 'No'],
-              studyDesign.confounders.length > 0
-                ? ['Confounders', studyDesign.confounders.map(c => c.name).join(', ')]
-                : null,
-              studyDesign.notes.length > 0
-                ? ['Notes', studyDesign.notes.join('; ')]
-                : null,
-            ].filter((x): x is [string, string] => x !== null).map(([dt, dd]) => (
-              <div key={dt as string}>
-                <dt className="text-slate-500 text-xs mb-0.5">{dt as string}</dt>
-                <dd className="font-medium text-slate-800 capitalize">{(dd as string).toLowerCase()}</dd>
-              </div>
-            ))}
-          </dl>
-        </div>
-      </div>
-    )
-  }
-
   return (
     <div className="max-w-xl mx-auto">
-      <h2 className="text-2xl font-bold text-slate-900 mb-1">Study design</h2>
-      <p className="text-slate-500 mb-8 text-sm">Answer a few questions so HTA can select the right statistical test.</p>
-
       <div className="space-y-8">
 
         {/* Q1 — Study type */}
@@ -242,6 +413,152 @@ export default function StepDialogue({ studyDesign, onConfirm }: Props) {
         )}
 
       </div>
+    </div>
+  )
+}
+
+// ── Main component — LLM chat with form fallback ───────────────────────────────
+
+export default function StepDialogue({ sessionId, messages, studyDesign, edaSummary, onSend, onConfirm }: Props) {
+  const [mode, setMode] = useState<'chat' | 'form'>('chat')
+  const [input, setInput] = useState('')
+  const [sending, setSending] = useState(false)
+  const [streamError, setStreamError] = useState<string | null>(null)
+  const [draft, setDraft] = useState<StudyDesign | null>(null)
+  const initRef = useRef(false)
+  const scrollRef = useRef<HTMLDivElement>(null)
+
+  // The design captured by the dialogue (done event → hook state), with any local
+  // edits from the right panel overlaid.
+  const design = draft ?? studyDesign
+
+  // Keep the newest message / streaming token in view.
+  useEffect(() => {
+    const el = scrollRef.current
+    if (el) el.scrollTop = el.scrollHeight
+  }, [messages, sending])
+
+  const runSend = async (msg: string, isInitCall = false) => {
+    setSending(true)
+    setStreamError(null)
+    try {
+      const result = await onSend(msg)
+      if (isInitCall && result.isComplete && result.tokens === 0) {
+        // Completed instantly with no conversation — a dry-run stub, not a real LLM.
+        setMode('form')
+      } else if (result.tokens === 0 && !result.isComplete) {
+        setStreamError('The assistant did not respond — the LLM may be unreachable. Retry by sending a message, or use the form instead.')
+      }
+    } catch (e) {
+      setStreamError(String(e))
+    } finally {
+      setSending(false)
+    }
+  }
+
+  // On mount: probe for dry-run mode (the dialogue endpoint would stream a canned demo
+  // conversation — show the form instead), and open the dialogue with a hidden
+  // __init__ message carrying the BET EDA context.
+  useEffect(() => {
+    if (initRef.current) return
+    initRef.current = true
+    if (sessionId) {
+      previewTest(sessionId)
+        .then(p => { if (p.rationale.startsWith('Dry-run mode')) setMode('form') })
+        .catch(() => { /* best-effort probe — stay in chat mode */ })
+    }
+    if (messages.length === 0 && !studyDesign) {
+      // Deferred to a microtask so no state update runs synchronously in the effect.
+      const init = buildInitMessage(edaSummary)
+      queueMicrotask(() => { void runSend(init, true) })
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  const handleSend = () => {
+    const msg = input.trim()
+    if (!msg || sending) return
+    setInput('')
+    void runSend(msg)
+  }
+
+  const captured = design !== null
+  const awaitingAssistant = sending
+    && (messages.length === 0 || messages[messages.length - 1]?.role === 'user')
+
+  return (
+    <div>
+      <div className="flex items-start justify-between gap-4 mb-6">
+        <div>
+          <h2 className="text-2xl font-bold text-slate-900 mb-1">Study design</h2>
+          <p className="text-slate-500 text-sm">
+            {mode === 'chat'
+              ? 'Describe your study to the assistant — it captures the design, and you can correct any field before confirming.'
+              : 'Answer a few questions so HTA can select the right statistical test.'}
+          </p>
+        </div>
+        <button
+          onClick={() => setMode(m => (m === 'chat' ? 'form' : 'chat'))}
+          className="shrink-0 px-3 py-1.5 text-xs font-medium text-slate-600 border border-slate-200 rounded-lg hover:bg-slate-50 transition-colors"
+        >
+          {mode === 'chat' ? 'Use form instead' : 'Use chat instead'}
+        </button>
+      </div>
+
+      {mode === 'form' ? (
+        <DesignForm onConfirm={onConfirm} />
+      ) : (
+        <div className="grid grid-cols-1 lg:grid-cols-5 gap-6 items-start">
+
+          {/* LEFT (60%) — chat history + input */}
+          <div className="lg:col-span-3 bg-white border border-slate-200 rounded-2xl shadow-sm flex flex-col h-[34rem]">
+            <div ref={scrollRef} className="flex-1 overflow-y-auto p-4 space-y-3">
+              {messages.map((m, i) => <ChatBubble key={i} role={m.role} content={m.content} />)}
+              {awaitingAssistant && <TypingIndicator />}
+              {streamError && (
+                <div className="text-xs text-red-700 bg-red-50 border border-red-200 rounded-lg px-3 py-2">
+                  {streamError}
+                </div>
+              )}
+            </div>
+            <div className="border-t border-slate-100 p-3 flex gap-2">
+              <input
+                value={input}
+                onChange={e => setInput(e.target.value)}
+                onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); handleSend() } }}
+                placeholder={captured ? 'Design captured — review it on the right' : 'Type your reply…'}
+                disabled={sending || captured}
+                className="flex-1 border border-slate-200 rounded-xl px-3.5 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-brand disabled:bg-slate-50 disabled:text-slate-400"
+              />
+              <button
+                onClick={handleSend}
+                disabled={sending || captured || !input.trim()}
+                className="flex items-center gap-1.5 px-4 py-2.5 bg-brand text-white rounded-xl text-sm font-semibold hover:bg-brand-dark transition-colors disabled:opacity-40"
+              >
+                <Send size={14} /> Send
+              </button>
+            </div>
+          </div>
+
+          {/* RIGHT (40%) — study design summary card */}
+          <div className="lg:col-span-2">
+            {design ? (
+              <EditableDesignCard
+                draft={design}
+                onChange={setDraft}
+                onConfirm={() => onConfirm(design)}
+              />
+            ) : (
+              <div className="bg-white rounded-2xl border border-dashed border-slate-300 p-8 text-center">
+                <p className="text-sm text-slate-400 leading-relaxed">
+                  The study design summary will appear here once the conversation has gathered enough information.
+                </p>
+              </div>
+            )}
+          </div>
+
+        </div>
+      )}
     </div>
   )
 }

@@ -98,20 +98,32 @@ export function useSession() {
     update({ variables: payload, profile, step: 4 })
   }, [state.sessionId, update])
 
-  // Step 4 — one dialogue turn (streamed)
-  const sendMessage = useCallback(async (userMessage: string) => {
-    if (!state.sessionId) return
+  // Step 4 — one dialogue turn (streamed). Returns stream stats so the caller can
+  // detect degenerate streams (a dry-run stub completing instantly, or a dead LLM).
+  // Messages prefixed '__init__' open the dialogue: they are hidden from the visible
+  // chat, and the prefix is stripped before sending so the remainder (researcher
+  // framing + BET EDA context) becomes the first stored user turn — live providers
+  // require a non-empty message history.
+  const sendMessage = useCallback(async (
+    userMessage: string,
+  ): Promise<{ tokens: number; isComplete: boolean }> => {
+    if (!state.sessionId) return { tokens: 0, isComplete: false }
 
-    const isInit = userMessage === '__init__'
+    const isInit = userMessage.startsWith('__init__')
     if (!isInit) {
       update({ messages: [...state.messages, { role: 'user', content: userMessage }] })
     }
+    const wireMessage = isInit
+      ? (userMessage.slice('__init__'.length).trimStart() || '__init__')
+      : userMessage
 
     let assistantText = ''
     let finalDesign: StudyDesign | null = null
+    let tokens = 0
 
-    for await (const event of dialogueTurn(state.sessionId, userMessage)) {
+    for await (const event of dialogueTurn(state.sessionId, wireMessage)) {
       if (event.type === 'token' && typeof event.content === 'string') {
+        tokens += 1
         assistantText += event.content
         setState(s => {
           const msgs = [...s.messages]
@@ -134,6 +146,7 @@ export function useSession() {
       dialogueTurn: state.dialogueTurn + 1,
       studyDesign: finalDesign ?? state.studyDesign,
     })
+    return { tokens, isComplete: finalDesign !== null }
   }, [state, update])
 
   const confirmDesign = useCallback(async (design: StudyDesign) => {

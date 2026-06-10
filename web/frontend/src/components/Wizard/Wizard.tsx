@@ -67,8 +67,10 @@ export default function Wizard() {
         )}
         {state.step === 4 && (
           <StepDialogue
+            sessionId={state.sessionId}
             messages={state.messages}
             studyDesign={state.studyDesign}
+            edaSummary={state.profile?.eda_summary ?? null}
             onSend={session.sendMessage}
             onConfirm={session.confirmDesign}
           />
