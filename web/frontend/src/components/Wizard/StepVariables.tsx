@@ -86,22 +86,34 @@ export default function StepVariables({ columns, inferredTypes, preview, onNext 
       {/* ── Data preview ─────────────────────────────────────────────────── */}
       <div className="mb-8 bg-white rounded-xl border border-slate-200 overflow-hidden">
         <div className="px-4 py-3 border-b border-slate-100 bg-slate-50 flex items-center justify-between gap-4">
-          <p className="text-xs font-semibold text-slate-500 uppercase tracking-wide">Data preview</p>
-          <div className="flex items-center gap-2 text-xs text-slate-500">
-            <span>Rows:</span>
-            {[5, 10, 20, 50].map(n => (
-              <button
-                key={n}
-                onClick={() => setPreviewRows(n)}
-                className={`px-2 py-0.5 rounded transition-colors ${
-                  previewRows === n
-                    ? 'bg-brand text-white font-medium'
-                    : 'bg-slate-200 text-slate-600 hover:bg-slate-300'
-                }`}
-              >
-                {n}
-              </button>
-            ))}
+          <p className="text-xs font-semibold text-slate-500 uppercase tracking-wide">
+            Data preview
+            <span className="ml-2 font-normal normal-case text-slate-400">
+              showing {Math.min(previewRows, preview.length)} of {preview.length} loaded rows
+            </span>
+          </p>
+          <div className="flex items-center gap-1.5 text-xs text-slate-500">
+            <span>Show:</span>
+            {[5, 10, 20, 50].map(n => {
+              const unavailable = n > preview.length
+              return (
+                <button
+                  key={n}
+                  onClick={() => !unavailable && setPreviewRows(n)}
+                  disabled={unavailable}
+                  title={unavailable ? `Only ${preview.length} rows available` : undefined}
+                  className={`px-2 py-0.5 rounded transition-colors ${
+                    previewRows === n && !unavailable
+                      ? 'bg-brand text-white font-medium'
+                      : unavailable
+                        ? 'bg-slate-100 text-slate-300 cursor-not-allowed'
+                        : 'bg-slate-200 text-slate-600 hover:bg-slate-300'
+                  }`}
+                >
+                  {n}
+                </button>
+              )
+            })}
           </div>
         </div>
         <div className="overflow-x-auto">
