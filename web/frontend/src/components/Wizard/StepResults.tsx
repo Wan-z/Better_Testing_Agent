@@ -11,8 +11,8 @@ interface Props {
   onReset: () => void
 }
 
-const STAGES = ['selecting_test', 'executing_test', 'generating_report']
-const STAGE_LABELS = ['Selecting test', 'Running test', 'Generating report']
+const STAGES = ['selecting_test', 'executing_test', 'generating_report', 'enriching_prose']
+const STAGE_LABELS = ['Selecting test', 'Running test', 'Generating report', 'Writing summary…']
 
 export default function StepResults({ report, sessionId, progressMessage, progressStage, error, onReset }: Props) {
   if (error) {
