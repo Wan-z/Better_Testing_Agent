@@ -11,18 +11,18 @@ export interface SessionState {
   sessionId: string | null
   status: SessionStatus | null
   step: 1 | 2 | 3 | 4 | 5 | 6
-  // Step 1
+  // Step 1 — Upload
   columns: string[]
   inferredTypes: Record<string, VariableType>
   preview: Record<string, unknown>[]
-  // Step 2
+  // Step 3 — Variables
   variables: VariablesPayload | null
-  profile: DataProfile | null      // BET EDA profile, fetched after the variables step
-  // Step 3
+  profile: DataProfile | null      // BET EDA profile (step 2 Explore), fetched after the variables step
+  // Step 4 — Design dialogue
   messages: DialogueMessage[]
   studyDesign: StudyDesign | null
   dialogueTurn: number
-  // Step 4 / 5
+  // Steps 5–6 — run (triggered from Review) + Results
   progressMessage: string
   progressStage: string
   report: Report | null
@@ -98,7 +98,7 @@ export function useSession() {
     update({ variables: payload, profile, step: 4 })
   }, [state.sessionId, update])
 
-  // Step 3 — one dialogue turn (streamed)
+  // Step 4 — one dialogue turn (streamed)
   const sendMessage = useCallback(async (userMessage: string) => {
     if (!state.sessionId) return
 
