@@ -55,76 +55,42 @@ function buildInitMessage(eda?: EdaSummary | null): string {
   return lines.join('\n')
 }
 
-// ── Inline clickable terms ─────────────────────────────────────────────────────
-// Known option words get turned into chip:// pseudo-links in the markdown so the
-// custom <a> renderer can render them as inline buttons.
-// Order matters: longer/more-specific patterns must come before shorter ones.
-
-const CHIP_TERMS: Array<[RegExp, string]> = [
-  [/quasi[- ]experimental/gi,       'Quasi-experimental'],
-  [/observational/gi,                'Observational'],
-  [/experimental/gi,                 'Experimental'],
-  [/repeated[- ]measures?/gi,        'Repeated measures / panel data'],
-  [/panel[- ]data/gi,                'Repeated measures / panel data'],
-  [/longitudinal/gi,                 'Repeated measures / panel data'],
-  [/\bnot\s+randomized\b/gi,         'Not randomized'],
-  [/\brandomized\b/gi,               'Yes, randomized'],
-  [/\bnonlinear\b/gi,                'Nonlinear / complex'],
-  [/\bmonotone\b/gi,                 'Monotone (nonlinear)'],
-  [/(?<!\w)linear(?!\w)/gi,          'Linear'],
-]
-
-// Replace known option words with chip:// pseudo-links in non-code parts of md.
-function injectChipLinks(md: string): string {
-  // Build a combined one-pass regex (longest patterns first = correct priority).
-  const combined = new RegExp(
-    CHIP_TERMS.map(([re]) => `(${re.source})`).join('|'),
-    'gi',
-  )
-  // Split on code spans so we never touch backtick content.
-  return md.split(/(```[\s\S]*?```|`[^`]*`)/g).map((chunk, i) => {
-    if (i % 2 === 1) return chunk   // odd = code span, leave unchanged
-    return chunk.replace(combined, match => {
-      for (const [re, answer] of CHIP_TERMS) {
-        if (new RegExp(`^(?:${re.source})$`, 'i').test(match))
-          return `[${match}](chip://${encodeURIComponent(answer)})`
-      }
-      return match
-    })
-  }).join('')
-}
-
-// ── Quick-reply chip detection (bottom-of-bubble extras) ───────────────────────
+// ── Quick-reply options — shown below the last assistant bubble ────────────────
+// Each group maps a pattern in the assistant's text to the relevant answer choices.
+// Only the first matching group is shown (questions are asked one at a time).
 const QUICK_REPLY_GROUPS: Array<{ pattern: RegExp; options: string[] }> = [
   {
-    pattern: /confounder|confounding/i,
-    options: ['No known confounders', 'Age', 'Sex / gender', 'Socioeconomic status', 'Geographic region'],
+    pattern: /type of study|how.+conduct|experimental|observational|quasi/i,
+    options: ['Experimental', 'Observational', 'Quasi-experimental'],
+  },
+  {
+    pattern: /same participant|independent obs|within.?subject|between.?subject|repeated.?measure|measured.*multiple|multiple.*time|longitudinal/i,
+    options: ['Independent (between subjects)', 'Repeated / paired (within subjects)', 'Mixed / clustered'],
   },
   {
     pattern: /randomiz|randomly.?assign/i,
-    options: ["Don't know / unsure"],
+    options: ['Yes, randomized', 'No, not randomized', "Don't know"],
   },
   {
-    pattern: /relationship.?form|expect.*relationship|nonlinear|monotone/i,
-    options: ["Don't know"],
+    pattern: /relationship.+form|form of.+relationship|what.*relationship|nonlinear|monotone/i,
+    options: ['Linear', 'Monotone (nonlinear)', 'Nonlinear / complex', "Don't know"],
+  },
+  {
+    pattern: /confounder|confounding|control.?variable|covariate/i,
+    options: ['No known confounders', 'Age', 'Sex / gender', 'Socioeconomic status', "Don't know"],
   },
 ]
 
 function detectQuickReplies(text: string): string[] {
-  const matches: string[] = []
   for (const group of QUICK_REPLY_GROUPS) {
-    if (group.pattern.test(text)) matches.push(...group.options)
-    if (matches.length >= 4) break
+    if (group.pattern.test(text)) return group.options
   }
-  return matches
+  return []
 }
 
 // ── Chat pieces ────────────────────────────────────────────────────────────────
 
-function ChatBubble({
-  role, content,
-  chips, onChipClick,
-}: DialogueMessage & { chips?: string[]; onChipClick?: (opt: string) => void }) {
+function ChatBubble({ role, content }: DialogueMessage) {
   const isUser = role === 'user'
   return (
     <div className={`flex ${isUser ? 'justify-end' : 'justify-start'}`}>
@@ -132,49 +98,20 @@ function ChatBubble({
         isUser ? 'bg-brand text-white rounded-br-md whitespace-pre-wrap' : 'bg-slate-100 text-slate-800 rounded-bl-md'
       }`}>
         {isUser ? content : (
-          <>
-            <ReactMarkdown
-              components={{
-                p:      ({ children }) => <p className="mb-2 last:mb-0">{children}</p>,
-                strong: ({ children }) => <strong className="font-semibold">{children}</strong>,
-                em:     ({ children }) => <em className="italic">{children}</em>,
-                ol:     ({ children }) => <ol className="list-decimal pl-4 mb-2 space-y-1">{children}</ol>,
-                ul:     ({ children }) => <ul className="list-disc pl-4 mb-2 space-y-1">{children}</ul>,
-                li:     ({ children }) => <li>{children}</li>,
-                hr:     () => <hr className="border-slate-300 my-2" />,
-                code:   ({ children }) => <code className="bg-slate-200 rounded px-1 text-xs font-mono">{children}</code>,
-                a: ({ href, children }) => {
-                  if (href?.startsWith('chip://') && onChipClick) {
-                    const answer = decodeURIComponent(href.slice(7))
-                    return (
-                      <button
-                        onClick={() => onChipClick(answer)}
-                        className="text-brand underline decoration-dotted hover:decoration-solid hover:bg-indigo-50 rounded px-0.5 transition-colors font-medium cursor-pointer"
-                      >
-                        {children}
-                      </button>
-                    )
-                  }
-                  return <a href={href} target="_blank" rel="noreferrer">{children}</a>
-                },
-              }}
-            >
-              {onChipClick ? injectChipLinks(content) : content}
-            </ReactMarkdown>
-            {chips && chips.length > 0 && (
-              <div className="flex flex-wrap gap-1.5 mt-2 pt-2 border-t border-slate-200">
-                {chips.map(opt => (
-                  <button
-                    key={opt}
-                    onClick={() => onChipClick?.(opt)}
-                    className="px-2.5 py-1 text-xs bg-white border border-indigo-200 text-brand rounded-full hover:bg-indigo-50 active:bg-indigo-100 transition-colors"
-                  >
-                    {opt}
-                  </button>
-                ))}
-              </div>
-            )}
-          </>
+          <ReactMarkdown
+            components={{
+              p:      ({ children }) => <p className="mb-2 last:mb-0">{children}</p>,
+              strong: ({ children }) => <strong className="font-semibold">{children}</strong>,
+              em:     ({ children }) => <em className="italic">{children}</em>,
+              ol:     ({ children }) => <ol className="list-decimal pl-4 mb-2 space-y-1">{children}</ol>,
+              ul:     ({ children }) => <ul className="list-disc pl-4 mb-2 space-y-1">{children}</ul>,
+              li:     ({ children }) => <li>{children}</li>,
+              hr:     () => <hr className="border-slate-300 my-2" />,
+              code:   ({ children }) => <code className="bg-slate-200 rounded px-1 text-xs font-mono">{children}</code>,
+            }}
+          >
+            {content}
+          </ReactMarkdown>
         )}
       </div>
     </div>
@@ -594,8 +531,9 @@ export default function StepDialogue({ sessionId, messages, studyDesign, edaSumm
     void runSend(msg)
   }
 
-  const handleChipClick = (opt: string) => {
-    setInput(prev => prev.trim() ? `${prev}; ${opt}` : opt)
+  const handleOptionClick = (opt: string) => {
+    if (sending || captured) return
+    void runSend(opt)
   }
 
   const captured = design !== null
@@ -639,18 +577,22 @@ export default function StepDialogue({ sessionId, messages, studyDesign, edaSumm
           <div className="lg:col-span-3 bg-white border border-slate-200 rounded-2xl shadow-sm flex flex-col h-[34rem]">
             <div ref={scrollRef} className="flex-1 overflow-y-auto p-4 space-y-3">
               {messages.map((m, i) => (
-                <ChatBubble
-                  key={i}
-                  role={m.role}
-                  content={m.content}
-                  chips={
-                    i === messages.length - 1 && m.role === 'assistant'
-                      ? quickReplies : undefined
-                  }
-                  onChipClick={handleChipClick}
-                />
+                <ChatBubble key={i} role={m.role} content={m.content} />
               ))}
               {awaitingAssistant && <TypingIndicator />}
+              {!captured && !sending && quickReplies.length > 0 && (
+                <div className="flex flex-wrap gap-2 pt-1">
+                  {quickReplies.map(opt => (
+                    <button
+                      key={opt}
+                      onClick={() => handleOptionClick(opt)}
+                      className="px-3 py-1.5 text-xs bg-white border border-indigo-200 text-brand rounded-lg hover:bg-indigo-50 active:bg-indigo-100 transition-colors font-medium shadow-sm"
+                    >
+                      {opt}
+                    </button>
+                  ))}
+                </div>
+              )}
               {streamError && (
                 <div className="text-xs text-red-700 bg-red-50 border border-red-200 rounded-lg px-3 py-2">
                   {streamError}
