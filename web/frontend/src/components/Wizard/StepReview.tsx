@@ -1,7 +1,6 @@
 import { PlayCircle, ArrowLeft } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import type { DataProfile, StudyDesign, VariablesPayload } from '../../types/api'
-import PlotViewer from '../Results/PlotViewer'
 import { previewTest } from '../../api/client'
 
 const TEST_LABELS: Record<string, string> = {
@@ -36,15 +35,11 @@ export default function StepReview({ sessionId, profile, variables, studyDesign,
       .then(setPlannedTest)
       .catch(() => { /* non-fatal — card just stays hidden */ })
   }, [sessionId])
-  const eda = profile?.eda_summary ?? null
-  const edaPlots = profile?.eda_plots ?? []
-  const hasEda = !!eda && edaPlots.length > 0
-
   return (
     <div className="max-w-3xl mx-auto">
       <h2 className="text-2xl font-bold text-slate-900 mb-2">Review & run</h2>
       <p className="text-slate-500 mb-8">
-        Here is what an exploratory BET screen found in your data. Review it, then choose how to proceed.
+        Review your analysis setup, then run the test.
       </p>
 
       <div className="space-y-4 mb-8">
@@ -99,47 +94,6 @@ export default function StepReview({ sessionId, profile, variables, studyDesign,
           )}
         </div>
 
-        {/* ── Exploratory analysis: nonlinear relationships (BET) ──────────── */}
-        {hasEda && (
-          <div className="bg-white rounded-xl border border-slate-200 p-5">
-            <div className="flex items-center gap-2 mb-1 flex-wrap">
-              <h3 className="text-sm font-semibold text-slate-700">
-                Exploratory analysis — nonlinear relationships (BET)
-              </h3>
-              {eda!.n_nonlinear_only > 0 && (
-                <span className="px-2 py-0.5 bg-indigo-100 text-brand rounded-full text-[11px] font-medium">
-                  {eda!.n_nonlinear_only} invisible to correlation
-                </span>
-              )}
-              {eda!.subtype_suggestive && (
-                <span className="px-2 py-0.5 bg-amber-100 text-amber-800 rounded-full text-[11px] font-medium">
-                  possible latent subgroups
-                </span>
-              )}
-            </div>
-            <p className="text-sm text-slate-600 mb-3">{eda!.text}</p>
-
-            <PlotViewer plots={edaPlots} />
-
-            <p className="text-xs text-slate-400 mt-3 leading-relaxed">
-              {(eda!.n_network_edges ?? 0) > 0 && (
-                <>
-                  The first tab is a <strong>dependence network</strong> (as in Xiang et al.): each
-                  variable is a node and every edge is a significant nonlinear relationship, coloured by
-                  its binary-interaction type.{' '}
-                </>
-              )}
-              The pair tabs show each top pair on the empirical-copula (rank) unit square, with points
-              coloured by the dominant <strong>binary interaction</strong> — the shaded checkerboard is
-              that interaction's ± region on the BET grid — so a cluster of one colour reveals a latent
-              subgroup (heterogeneity).
-              {eda!.label_colored_by
-                ? ` The last tab instead colours the top pair by the known label "${eda!.label_colored_by}".`
-                : ''}
-            </p>
-          </div>
-        )}
-
         {/* Hypothesis */}
         <div className="bg-white rounded-xl border border-slate-200 p-5">
           <h3 className="text-sm font-semibold text-slate-700 mb-2">Hypothesis</h3>
@@ -193,9 +147,7 @@ export default function StepReview({ sessionId, profile, variables, studyDesign,
       <div className="bg-indigo-50 rounded-xl border border-indigo-200 p-5">
         <h3 className="text-sm font-semibold text-brand mb-1">How would you like to proceed?</h3>
         <p className="text-sm text-slate-600 mb-4">
-          {hasEda && eda!.n_significant > 0
-            ? 'BET surfaced the nonlinear structure above. Run the planned test now, or go back to refocus the analysis — e.g. choose a flagged pair, or add the subgroup variable that explains the heterogeneity.'
-            : 'HTA will pick the appropriate test from your data types, study design, and normality checks. Run it now, or go back to adjust your variable choices.'}
+          HTA will pick the appropriate test from your data types, study design, and normality checks. Run it now, or go back to adjust your variable choices.
         </p>
         <div className="flex flex-wrap gap-3">
           <button
