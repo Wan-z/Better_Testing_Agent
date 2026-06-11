@@ -55,40 +55,66 @@ function buildInitMessage(eda?: EdaSummary | null): string {
   return lines.join('\n')
 }
 
-// ── Quick-reply chip detection ─────────────────────────────────────────────────
-// Each rule scans the last assistant message and surfaces clickable option chips
-// so users can answer without typing from scratch.
+// ── Inline clickable terms ─────────────────────────────────────────────────────
+// Known option words get turned into chip:// pseudo-links in the markdown so the
+// custom <a> renderer can render them as inline buttons.
+// Order matters: longer/more-specific patterns must come before shorter ones.
 
+const CHIP_TERMS: Array<[RegExp, string]> = [
+  [/quasi[- ]experimental/gi,       'Quasi-experimental'],
+  [/observational/gi,                'Observational'],
+  [/experimental/gi,                 'Experimental'],
+  [/repeated[- ]measures?/gi,        'Repeated measures / panel data'],
+  [/panel[- ]data/gi,                'Repeated measures / panel data'],
+  [/longitudinal/gi,                 'Repeated measures / panel data'],
+  [/\bnot\s+randomized\b/gi,         'Not randomized'],
+  [/\brandomized\b/gi,               'Yes, randomized'],
+  [/\bnonlinear\b/gi,                'Nonlinear / complex'],
+  [/\bmonotone\b/gi,                 'Monotone (nonlinear)'],
+  [/(?<!\w)linear(?!\w)/gi,          'Linear'],
+]
+
+// Replace known option words with chip:// pseudo-links in non-code parts of md.
+function injectChipLinks(md: string): string {
+  // Build a combined one-pass regex (longest patterns first = correct priority).
+  const combined = new RegExp(
+    CHIP_TERMS.map(([re]) => `(${re.source})`).join('|'),
+    'gi',
+  )
+  // Split on code spans so we never touch backtick content.
+  return md.split(/(```[\s\S]*?```|`[^`]*`)/g).map((chunk, i) => {
+    if (i % 2 === 1) return chunk   // odd = code span, leave unchanged
+    return chunk.replace(combined, match => {
+      for (const [re, answer] of CHIP_TERMS) {
+        if (new RegExp(`^(?:${re.source})$`, 'i').test(match))
+          return `[${match}](chip://${encodeURIComponent(answer)})`
+      }
+      return match
+    })
+  }).join('')
+}
+
+// ── Quick-reply chip detection (bottom-of-bubble extras) ───────────────────────
 const QUICK_REPLY_GROUPS: Array<{ pattern: RegExp; options: string[] }> = [
-  {
-    pattern: /observational|experimental|quasi.?experiment/i,
-    options: ['Observational', 'Experimental', 'Quasi-experimental'],
-  },
-  {
-    pattern: /repeated.?measure|panel.?data|longitudinal|independent.*row|same.*(jurisdiction|subject|participant|unit)|independence of observation/i,
-    options: ['Repeated measures / panel data', 'Independent observations (cross-sectional)'],
-  },
-  {
-    pattern: /randomiz|randomly.?assign/i,
-    options: ['Yes, randomized', 'Not randomized'],
-  },
-  {
-    pattern: /relationship.?form|expect.*relationship|linear.*relationship|nonlinear|monotone/i,
-    options: ['Linear', 'Monotone (nonlinear)', 'Nonlinear / complex', "Don't know"],
-  },
   {
     pattern: /confounder|confounding/i,
     options: ['No known confounders', 'Age', 'Sex / gender', 'Socioeconomic status', 'Geographic region'],
+  },
+  {
+    pattern: /randomiz|randomly.?assign/i,
+    options: ["Don't know / unsure"],
+  },
+  {
+    pattern: /relationship.?form|expect.*relationship|nonlinear|monotone/i,
+    options: ["Don't know"],
   },
 ]
 
 function detectQuickReplies(text: string): string[] {
   const matches: string[] = []
   for (const group of QUICK_REPLY_GROUPS) {
-    if (group.pattern.test(text)) {
-      matches.push(...group.options)
-      if (matches.length >= 6) break   // cap at 6 chips to avoid overflow
-    }
+    if (group.pattern.test(text)) matches.push(...group.options)
+    if (matches.length >= 4) break
   }
   return matches
 }
@@ -117,9 +143,23 @@ function ChatBubble({
                 li:     ({ children }) => <li>{children}</li>,
                 hr:     () => <hr className="border-slate-300 my-2" />,
                 code:   ({ children }) => <code className="bg-slate-200 rounded px-1 text-xs font-mono">{children}</code>,
+                a: ({ href, children }) => {
+                  if (href?.startsWith('chip://') && onChipClick) {
+                    const answer = decodeURIComponent(href.slice(7))
+                    return (
+                      <button
+                        onClick={() => onChipClick(answer)}
+                        className="text-brand underline decoration-dotted hover:decoration-solid hover:bg-indigo-50 rounded px-0.5 transition-colors font-medium cursor-pointer"
+                      >
+                        {children}
+                      </button>
+                    )
+                  }
+                  return <a href={href} target="_blank" rel="noreferrer">{children}</a>
+                },
               }}
             >
-              {content}
+              {onChipClick ? injectChipLinks(content) : content}
             </ReactMarkdown>
             {chips && chips.length > 0 && (
               <div className="flex flex-wrap gap-1.5 mt-2 pt-2 border-t border-slate-200">
