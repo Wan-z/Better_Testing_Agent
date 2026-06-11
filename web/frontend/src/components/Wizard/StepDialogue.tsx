@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { ArrowRight, X, Plus, Send } from 'lucide-react'
+import ReactMarkdown from 'react-markdown'
 import type {
   StudyDesign, StudyDesignType, MeasurementType, Confounder,
   DialogueMessage, EdaSummary,
@@ -60,10 +61,25 @@ function ChatBubble({ role, content }: DialogueMessage) {
   const isUser = role === 'user'
   return (
     <div className={`flex ${isUser ? 'justify-end' : 'justify-start'}`}>
-      <div className={`max-w-[85%] px-3.5 py-2.5 rounded-2xl text-sm whitespace-pre-wrap leading-relaxed ${
-        isUser ? 'bg-brand text-white rounded-br-md' : 'bg-slate-100 text-slate-800 rounded-bl-md'
+      <div className={`max-w-[85%] px-3.5 py-2.5 rounded-2xl text-sm leading-relaxed ${
+        isUser ? 'bg-brand text-white rounded-br-md whitespace-pre-wrap' : 'bg-slate-100 text-slate-800 rounded-bl-md'
       }`}>
-        {content}
+        {isUser ? content : (
+          <ReactMarkdown
+            components={{
+              p:      ({ children }) => <p className="mb-2 last:mb-0">{children}</p>,
+              strong: ({ children }) => <strong className="font-semibold">{children}</strong>,
+              em:     ({ children }) => <em className="italic">{children}</em>,
+              ol:     ({ children }) => <ol className="list-decimal pl-4 mb-2 space-y-1">{children}</ol>,
+              ul:     ({ children }) => <ul className="list-disc pl-4 mb-2 space-y-1">{children}</ul>,
+              li:     ({ children }) => <li>{children}</li>,
+              hr:     () => <hr className="border-slate-300 my-2" />,
+              code:   ({ children }) => <code className="bg-slate-200 rounded px-1 text-xs font-mono">{children}</code>,
+            }}
+          >
+            {content}
+          </ReactMarkdown>
+        )}
       </div>
     </div>
   )
