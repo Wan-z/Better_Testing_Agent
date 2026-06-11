@@ -186,7 +186,7 @@ export function useSession() {
 
   const reset = useCallback(() => {
     localStorage.removeItem(SESSION_STORAGE_KEY)
-    setState(INITIAL)
+    setState({ ...INITIAL, restoring: false })
   }, [])
 
   return { state, upload, setVariables, sendMessage, confirmDesign, runAnalysis, reset, update }
