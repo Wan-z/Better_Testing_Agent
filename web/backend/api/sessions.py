@@ -131,6 +131,8 @@ def _eda_plots_and_summary(
     df: pd.DataFrame, cols: dict[str, Any], aligned: pd.DataFrame,
     numeric_columns: dict[str, list[float]], screen: Any, group: str | None,
     max_plots: int = 3,
+    outcome_variable: str | None = None,
+    predictor_variable: str | None = None,
 ) -> tuple[list[dict[str, Any]], dict[str, Any] | None]:
     """Xiang-style binary-interaction EDA plots for the top nonlinear pairs.
 
@@ -149,7 +151,20 @@ def _eda_plots_and_summary(
         return [], None
 
     sig = [f for f in screen.findings if f.significant]
-    chosen = sig[:max_plots] if sig else screen.findings[:1]
+
+    # Prioritise pairs that involve the user's selected variables:
+    # 0 = exact outcome×predictor pair, 1 = one of the two, 2 = unrelated.
+    def _pair_priority(f: Any) -> int:
+        has_o = bool(outcome_variable and (f.x == outcome_variable or f.y == outcome_variable))
+        has_p = bool(predictor_variable and (f.x == predictor_variable or f.y == predictor_variable))
+        if has_o and has_p:
+            return 0
+        if has_o or has_p:
+            return 1
+        return 2
+
+    sig_sorted = sorted(sig, key=_pair_priority)
+    chosen = sig_sorted[:max_plots] if sig_sorted else screen.findings[:1]
 
     # A categorical column (preferring the chosen group) fully present on the screened
     # rows with 2–8 categories → used to colour the top pair by known subgroup.
@@ -188,14 +203,12 @@ def _eda_plots_and_summary(
         spec["plotly_json"] = plotspec_to_plotly(spec)
         eda_plots.append(spec)
 
-    # Headline overview: the Xiang-style dependence network (variables = nodes,
-    # significant nonlinear pairs = edges coloured by binary interaction). Prepended so it
-    # is the first tab in the EDA viewer.
+    # Full dependence network appended last so focused pair plots come first.
     net = dependence_network(screen.findings, seed=0)
     if net.edges:
         net_spec = _network_plotspec(net)
         net_spec["plotly_json"] = plotspec_to_plotly(net_spec)
-        eda_plots.insert(0, net_spec)
+        eda_plots.append(net_spec)
 
     subtype = any(f.form in SUBTYPE_SUGGESTIVE_FORMS for f in chosen)
     summary: dict[str, Any] = {
@@ -261,11 +274,35 @@ def _run_bet_for_columns(
     }
 
 
+def _reorder_eda_plots(
+    plots: list[dict[str, Any]],
+    outcome: str | None,
+    predictor: str | None,
+) -> list[dict[str, Any]]:
+    """Put pair plots involving the selected variables first; network last."""
+    networks = [p for p in plots if p.get("plot_type") == "bet_network"]
+    pairs = [p for p in plots if p.get("plot_type") != "bet_network"]
+
+    def _relevance(p: dict[str, Any]) -> int:
+        xl, yl = p.get("x_label", ""), p.get("y_label", "")
+        has_o = bool(outcome and (xl == outcome or yl == outcome))
+        has_p = bool(predictor and (xl == predictor or yl == predictor))
+        if has_o and has_p:
+            return 0
+        if has_o or has_p:
+            return 1
+        return 2
+
+    pairs.sort(key=_relevance)
+    return pairs + networks
+
+
 def _build_profile(
     df: pd.DataFrame,
     outcome: str | None,
     group: str | None,
     precomputed_bet: dict[str, Any] | None = None,
+    predictor: str | None = None,
 ) -> dict[str, Any]:
     """Build a DataProfile dict (type inference + scipy normality).
 
@@ -282,11 +319,13 @@ def _build_profile(
     profile = profile_model.model_dump(mode="json")
 
     if precomputed_bet is not None:
-        profile["eda_plots"] = precomputed_bet.get("eda_plots", [])
+        raw_plots = precomputed_bet.get("eda_plots", [])
+        profile["eda_plots"] = _reorder_eda_plots(raw_plots, outcome, predictor)
         profile["eda_summary"] = precomputed_bet.get("eda_summary")
     elif ctx is not None:
         eda_plots, eda_summary = _eda_plots_and_summary(
-            df, ctx.cols, ctx.aligned, ctx.numeric_columns, ctx.screen, group)
+            df, ctx.cols, ctx.aligned, ctx.numeric_columns, ctx.screen, group,
+            outcome_variable=outcome, predictor_variable=predictor)
         profile["eda_plots"] = eda_plots
         profile["eda_summary"] = eda_summary
     return profile
@@ -366,7 +405,7 @@ async def set_variables(session_id: str, payload: VariablesPayload) -> dict[str,
     profile = await loop.run_in_executor(
         None,
         lambda: _build_profile(df, payload.outcome_variable, payload.group_variable,
-                                precomputed_bet))
+                                precomputed_bet, predictor=payload.predictor_variable))
 
     store.write_json(session_id, "variables.json", payload.model_dump())
     store.write_json(session_id, "profile.json", profile)
