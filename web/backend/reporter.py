@@ -9,11 +9,14 @@ the presentation-only BET EDA plots (which carry `plotly_json` and are not part 
 
 from __future__ import annotations
 
+import logging
 import sys
 from pathlib import Path
 from typing import Any, Optional
 
 import pandas as pd
+
+logger = logging.getLogger(__name__)
 
 # Make the engine (`hta`, under src/) importable.
 _ROOT = Path(__file__).resolve().parents[2]
@@ -147,7 +150,7 @@ def enrich_prose_with_llm(report: dict[str, Any]) -> dict[str, Any]:
         if parsed.get("methods"):
             report["methods_text"] = parsed["methods"]
     except Exception:
-        pass  # Deterministic text is already in the report — do not surface LLM errors.
+        logger.exception("LLM prose enrichment failed — falling back to deterministic text")
 
     return report
 

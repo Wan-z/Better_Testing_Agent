@@ -203,6 +203,7 @@ export interface VariablesPayload {
   predictor_variable?: string
   group_variable?: string
   hypothesis: string
+  selected_variables?: string[]
 }
 
 export interface DialogueMessage {

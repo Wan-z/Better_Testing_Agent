@@ -19,6 +19,7 @@ class VariablesPayload(BaseModel):
     predictor_variable: Optional[str] = None  # explicit predictor; overrides auto-selection
     group_variable: Optional[str] = None
     hypothesis: str
+    selected_variables: Optional[list[str]] = None  # all checked vars in the UI (for display)
 
 
 class DialoguePayload(BaseModel):

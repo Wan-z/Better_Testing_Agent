@@ -74,6 +74,7 @@ export default function StepVariables({ columns, inferredTypes, preview, onNext 
       predictor_variable: predictor,
       group_variable: group === '__none__' ? undefined : group,
       hypothesis: hypothesis.trim(),
+      selected_variables: selectedVars,
     })
     setLoading(false)
   }

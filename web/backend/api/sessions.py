@@ -298,8 +298,9 @@ async def upload(file: UploadFile = File(...)) -> UploadResponse:
         raise HTTPException(status_code=400, detail="Only CSV files are accepted.")
 
     raw = await file.read()
+    loop = asyncio.get_event_loop()
     try:
-        df = pd.read_csv(io.BytesIO(raw))
+        df = await loop.run_in_executor(None, lambda: pd.read_csv(io.BytesIO(raw)))
     except Exception as exc:
         raise HTTPException(status_code=400, detail=f"Could not parse CSV: {exc}")
 
@@ -307,7 +308,7 @@ async def upload(file: UploadFile = File(...)) -> UploadResponse:
     store.init_session(session_id)
     store.write(session_id, "data.csv", raw)
 
-    inferred = _infer_types(df)
+    inferred = await loop.run_in_executor(None, _infer_types, df)
     preview = df.head(50).fillna("").to_dict(orient="records")
 
     store.write_json(session_id, "preview.json", {
