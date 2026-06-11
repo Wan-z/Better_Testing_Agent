@@ -57,35 +57,42 @@ function buildInitMessage(eda?: EdaSummary | null): string {
 
 // ── Quick-reply options — shown below the last assistant bubble ────────────────
 // Each group maps a pattern in the assistant's text to the relevant answer choices.
-// Only the first matching group is shown (questions are asked one at a time).
-const QUICK_REPLY_GROUPS: Array<{ pattern: RegExp; options: string[] }> = [
+// ALL matching groups are returned so multi-question messages show options for each.
+
+interface OptionGroup { label: string; options: string[] }
+
+const QUICK_REPLY_GROUPS: Array<OptionGroup & { pattern: RegExp }> = [
   {
+    label: 'Study type',
     pattern: /type of study|how.+conduct|experimental|observational|quasi/i,
     options: ['Experimental', 'Observational', 'Quasi-experimental'],
   },
   {
-    pattern: /same participant|independent obs|within.?subject|between.?subject|repeated.?measure|measured.*multiple|multiple.*time|longitudinal/i,
-    options: ['Independent (between subjects)', 'Repeated / paired (within subjects)', 'Mixed / clustered'],
-  },
-  {
+    label: 'Randomization',
     pattern: /randomiz|randomly.?assign/i,
     options: ['Yes, randomized', 'No, not randomized', "Don't know"],
   },
   {
+    label: 'Measurement structure',
+    pattern: /same participant|independent obs|within.?subject|between.?subject|repeated.?measure|measured.*multiple|multiple.*time|longitudinal/i,
+    options: ['Independent (between subjects)', 'Repeated / paired (within subjects)', 'Mixed / clustered'],
+  },
+  {
+    label: 'Relationship form',
     pattern: /relationship.+form|form of.+relationship|what.*relationship|nonlinear|monotone/i,
     options: ['Linear', 'Monotone (nonlinear)', 'Nonlinear / complex', "Don't know"],
   },
   {
+    label: 'Confounders',
     pattern: /confounder|confounding|control.?variable|covariate/i,
     options: ['No known confounders', 'Age', 'Sex / gender', 'Socioeconomic status', "Don't know"],
   },
 ]
 
-function detectQuickReplies(text: string): string[] {
-  for (const group of QUICK_REPLY_GROUPS) {
-    if (group.pattern.test(text)) return group.options
-  }
-  return []
+function detectQuickReplies(text: string): OptionGroup[] {
+  return QUICK_REPLY_GROUPS
+    .filter(g => g.pattern.test(text))
+    .map(({ label, options }) => ({ label, options }))
 }
 
 // ── Chat pieces ────────────────────────────────────────────────────────────────
@@ -581,15 +588,24 @@ export default function StepDialogue({ sessionId, messages, studyDesign, edaSumm
               ))}
               {awaitingAssistant && <TypingIndicator />}
               {!captured && !sending && quickReplies.length > 0 && (
-                <div className="flex flex-wrap gap-2 pt-1">
-                  {quickReplies.map(opt => (
-                    <button
-                      key={opt}
-                      onClick={() => handleOptionClick(opt)}
-                      className="px-3 py-1.5 text-xs bg-white border border-indigo-200 text-brand rounded-lg hover:bg-indigo-50 active:bg-indigo-100 transition-colors font-medium shadow-sm"
-                    >
-                      {opt}
-                    </button>
+                <div className="space-y-2 pt-1">
+                  {quickReplies.map(group => (
+                    <div key={group.label}>
+                      <p className="text-[10px] font-semibold text-slate-400 uppercase tracking-wide mb-1.5">
+                        {group.label}
+                      </p>
+                      <div className="flex flex-wrap gap-2">
+                        {group.options.map(opt => (
+                          <button
+                            key={opt}
+                            onClick={() => handleOptionClick(opt)}
+                            className="px-3 py-1.5 text-xs bg-white border border-indigo-200 text-brand rounded-lg hover:bg-indigo-50 active:bg-indigo-100 transition-colors font-medium shadow-sm"
+                          >
+                            {opt}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
                   ))}
                 </div>
               )}
