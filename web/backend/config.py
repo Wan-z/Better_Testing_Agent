@@ -26,12 +26,13 @@ ANTHROPIC_MODEL: str = os.getenv("ANTHROPIC_MODEL", "claude-sonnet-4-6")
 
 # OpenAI / Azure OpenAI
 OPENAI_API_KEY: str = os.getenv("OPENAI_API_KEY", "")
-OPENAI_BASE_URL: str = (
-    os.getenv("AZURE_OPENAI_ENDPOINT")
-    or os.getenv("OPENAI_BASE_URL")
-    or "https://api.openai.com/v1"
-)
+OPENAI_BASE_URL: str = os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1")
 OPENAI_MODEL: str = os.getenv("OPENAI_MODEL", "gpt-4o")
+
+# Azure OpenAI — when AZURE_OPENAI_ENDPOINT is set, use AzureOpenAI client
+AZURE_OPENAI_ENDPOINT: str = os.getenv("AZURE_OPENAI_ENDPOINT", "")
+AZURE_OPENAI_API_VERSION: str = os.getenv("AZURE_OPENAI_API_VERSION", "2024-02-01")
+IS_AZURE_OPENAI: bool = bool(AZURE_OPENAI_ENDPOINT)
 
 # DRY_RUN: explicit env flag wins; falls back to "no key → dry run"
 _active_key = ANTHROPIC_API_KEY if LLM_PROVIDER == "anthropic" else OPENAI_API_KEY

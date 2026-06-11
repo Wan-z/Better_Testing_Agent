@@ -33,6 +33,7 @@ from web.backend.config import (  # noqa: E402
     DRY_RUN, LLM_PROVIDER,
     ANTHROPIC_API_KEY, ANTHROPIC_MODEL,
     OPENAI_API_KEY, OPENAI_BASE_URL, OPENAI_MODEL,
+    AZURE_OPENAI_ENDPOINT, AZURE_OPENAI_API_VERSION, IS_AZURE_OPENAI,
 )
 
 
@@ -119,8 +120,17 @@ def enrich_prose_with_llm(report: dict[str, Any]) -> dict[str, Any]:
             )
             raw = msg.content[0].text
         else:
-            from openai import OpenAI
-            client = OpenAI(api_key=OPENAI_API_KEY, base_url=OPENAI_BASE_URL, timeout=30.0)
+            if IS_AZURE_OPENAI:
+                from openai import AzureOpenAI
+                client = AzureOpenAI(
+                    api_key=OPENAI_API_KEY,
+                    azure_endpoint=AZURE_OPENAI_ENDPOINT,
+                    api_version=AZURE_OPENAI_API_VERSION,
+                    timeout=30.0,
+                )
+            else:
+                from openai import OpenAI
+                client = OpenAI(api_key=OPENAI_API_KEY, base_url=OPENAI_BASE_URL, timeout=30.0)
             resp = client.chat.completions.create(
                 model=OPENAI_MODEL,
                 messages=[{"role": "user", "content": prompt}],

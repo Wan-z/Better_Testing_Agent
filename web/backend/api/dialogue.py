@@ -12,6 +12,7 @@ from web.backend.config import (
     DRY_RUN, LLM_PROVIDER,
     ANTHROPIC_API_KEY, ANTHROPIC_MODEL,
     OPENAI_API_KEY, OPENAI_BASE_URL, OPENAI_MODEL,
+    AZURE_OPENAI_ENDPOINT, AZURE_OPENAI_API_VERSION, IS_AZURE_OPENAI,
 )
 from web.backend.schemas import DialoguePayload
 from web.backend.storage.local import LocalStorage
@@ -170,9 +171,16 @@ async def _stream_anthropic(session_id: str, history: list[dict[str, str]],  # t
 
 async def _stream_openai(session_id: str, history: list[dict[str, str]],  # type: ignore[return]
                          system: str) -> object:
-    from openai import AsyncOpenAI
-
-    client = AsyncOpenAI(api_key=OPENAI_API_KEY, base_url=OPENAI_BASE_URL)
+    if IS_AZURE_OPENAI:
+        from openai import AsyncAzureOpenAI
+        client = AsyncAzureOpenAI(
+            api_key=OPENAI_API_KEY,
+            azure_endpoint=AZURE_OPENAI_ENDPOINT,
+            api_version=AZURE_OPENAI_API_VERSION,
+        )
+    else:
+        from openai import AsyncOpenAI
+        client = AsyncOpenAI(api_key=OPENAI_API_KEY, base_url=OPENAI_BASE_URL)
 
     tools = [{
         "type": "function",

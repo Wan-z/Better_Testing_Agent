@@ -119,11 +119,11 @@ export function useSession() {
 
     let assistantText = ''
     let finalDesign: StudyDesign | null = null
-    let tokens = 0
+    let tokenCount = 0
 
     for await (const event of dialogueTurn(state.sessionId, wireMessage)) {
       if (event.type === 'token' && typeof event.content === 'string') {
-        tokens += 1
+        tokenCount += 1
         assistantText += event.content
         setState(s => {
           const msgs = [...s.messages]
@@ -146,7 +146,7 @@ export function useSession() {
       dialogueTurn: state.dialogueTurn + 1,
       studyDesign: finalDesign ?? state.studyDesign,
     })
-    return { tokens, isComplete: finalDesign !== null }
+    return { tokens: tokenCount, isComplete: finalDesign !== null }
   }, [state, update])
 
   const confirmDesign = useCallback(async (design: StudyDesign) => {
