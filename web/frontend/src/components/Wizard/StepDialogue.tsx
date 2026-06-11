@@ -481,6 +481,8 @@ export default function StepDialogue({ sessionId, messages, studyDesign, edaSumm
   const [sending, setSending] = useState(false)
   const [streamError, setStreamError] = useState<string | null>(null)
   const [draft, setDraft] = useState<StudyDesign | null>(null)
+  // Tracks which option the user has selected per group label (not yet sent).
+  const [selectedOptions, setSelectedOptions] = useState<Record<string, string>>({})
   const initRef = useRef(false)
   const scrollRef = useRef<HTMLDivElement>(null)
 
@@ -495,6 +497,7 @@ export default function StepDialogue({ sessionId, messages, studyDesign, edaSumm
   }, [messages, sending])
 
   const runSend = async (msg: string, isInitCall = false) => {
+    setSelectedOptions({})
     setSending(true)
     setStreamError(null)
     try {
@@ -538,9 +541,11 @@ export default function StepDialogue({ sessionId, messages, studyDesign, edaSumm
     void runSend(msg)
   }
 
-  const handleOptionClick = (opt: string) => {
+  const handleOptionClick = (groupLabel: string, opt: string) => {
     if (sending || captured) return
-    void runSend(opt)
+    const next = { ...selectedOptions, [groupLabel]: opt }
+    setSelectedOptions(next)
+    setInput(Object.values(next).join('; '))
   }
 
   const captured = design !== null
@@ -588,25 +593,35 @@ export default function StepDialogue({ sessionId, messages, studyDesign, edaSumm
               ))}
               {awaitingAssistant && <TypingIndicator />}
               {!captured && !sending && quickReplies.length > 0 && (
-                <div className="space-y-2 pt-1">
+                <div className="space-y-3 pt-1">
                   {quickReplies.map(group => (
                     <div key={group.label}>
                       <p className="text-[10px] font-semibold text-slate-400 uppercase tracking-wide mb-1.5">
                         {group.label}
                       </p>
                       <div className="flex flex-wrap gap-2">
-                        {group.options.map(opt => (
-                          <button
-                            key={opt}
-                            onClick={() => handleOptionClick(opt)}
-                            className="px-3 py-1.5 text-xs bg-white border border-indigo-200 text-brand rounded-lg hover:bg-indigo-50 active:bg-indigo-100 transition-colors font-medium shadow-sm"
-                          >
-                            {opt}
-                          </button>
-                        ))}
+                        {group.options.map(opt => {
+                          const isSelected = selectedOptions[group.label] === opt
+                          return (
+                            <button
+                              key={opt}
+                              onClick={() => handleOptionClick(group.label, opt)}
+                              className={`px-3 py-1.5 text-xs rounded-lg transition-colors font-medium shadow-sm border ${
+                                isSelected
+                                  ? 'bg-brand text-white border-brand'
+                                  : 'bg-white border-indigo-200 text-brand hover:bg-indigo-50 active:bg-indigo-100'
+                              }`}
+                            >
+                              {opt}
+                            </button>
+                          )
+                        })}
                       </div>
                     </div>
                   ))}
+                  <p className="text-[10px] text-slate-400">
+                    Select answers above, then press <span className="font-semibold">Send</span> — or type your own reply below.
+                  </p>
                 </div>
               )}
               {streamError && (
