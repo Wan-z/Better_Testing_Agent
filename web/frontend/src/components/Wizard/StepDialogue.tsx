@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { ArrowRight, X, Plus, Send } from 'lucide-react'
 import ReactMarkdown from 'react-markdown'
 import type {
@@ -53,6 +53,44 @@ function buildInitMessage(eda?: EdaSummary | null): string {
     }
   }
   return lines.join('\n')
+}
+
+// ── Quick-reply chip detection ─────────────────────────────────────────────────
+// Each rule scans the last assistant message and surfaces clickable option chips
+// so users can answer without typing from scratch.
+
+const QUICK_REPLY_GROUPS: Array<{ pattern: RegExp; options: string[] }> = [
+  {
+    pattern: /observational|experimental|quasi.?experiment/i,
+    options: ['Observational', 'Experimental', 'Quasi-experimental'],
+  },
+  {
+    pattern: /repeated.?measure|panel.?data|longitudinal|independent.*row|same.*(jurisdiction|subject|participant|unit)|independence of observation/i,
+    options: ['Repeated measures / panel data', 'Independent observations (cross-sectional)'],
+  },
+  {
+    pattern: /randomiz|randomly.?assign/i,
+    options: ['Yes, randomized', 'Not randomized'],
+  },
+  {
+    pattern: /relationship.?form|expect.*relationship|linear.*relationship|nonlinear|monotone/i,
+    options: ['Linear', 'Monotone (nonlinear)', 'Nonlinear / complex', "Don't know"],
+  },
+  {
+    pattern: /confounder|confounding/i,
+    options: ['No known confounders', 'Age', 'Sex / gender', 'Socioeconomic status', 'Geographic region'],
+  },
+]
+
+function detectQuickReplies(text: string): string[] {
+  const matches: string[] = []
+  for (const group of QUICK_REPLY_GROUPS) {
+    if (group.pattern.test(text)) {
+      matches.push(...group.options)
+      if (matches.length >= 6) break   // cap at 6 chips to avoid overflow
+    }
+  }
+  return matches
 }
 
 // ── Chat pieces ────────────────────────────────────────────────────────────────
@@ -502,6 +540,15 @@ export default function StepDialogue({ sessionId, messages, studyDesign, edaSumm
   const awaitingAssistant = sending
     && (messages.length === 0 || messages[messages.length - 1]?.role === 'user')
 
+  const lastAssistantMsg = useMemo(
+    () => [...messages].reverse().find(m => m.role === 'assistant')?.content ?? '',
+    [messages],
+  )
+  const quickReplies = useMemo(
+    () => (!captured && !sending) ? detectQuickReplies(lastAssistantMsg) : [],
+    [lastAssistantMsg, captured, sending],
+  )
+
   return (
     <div>
       <div className="flex items-start justify-between gap-4 mb-6">
@@ -537,6 +584,19 @@ export default function StepDialogue({ sessionId, messages, studyDesign, edaSumm
                 </div>
               )}
             </div>
+            {quickReplies.length > 0 && (
+              <div className="px-3 pt-2 pb-1 flex flex-wrap gap-1.5 border-t border-slate-100">
+                {quickReplies.map(opt => (
+                  <button
+                    key={opt}
+                    onClick={() => setInput(opt)}
+                    className="px-2.5 py-1 text-xs bg-white border border-indigo-200 text-brand rounded-full hover:bg-indigo-50 transition-colors"
+                  >
+                    {opt}
+                  </button>
+                ))}
+              </div>
+            )}
             <div className="border-t border-slate-100 p-3 flex gap-2">
               <input
                 value={input}
