@@ -76,6 +76,7 @@ export default function Wizard() {
             messages={state.messages}
             studyDesign={state.studyDesign}
             edaSummary={state.profile?.eda_summary ?? null}
+            variables={state.variables}
             onSend={session.sendMessage}
             onConfirm={session.confirmDesign}
           />

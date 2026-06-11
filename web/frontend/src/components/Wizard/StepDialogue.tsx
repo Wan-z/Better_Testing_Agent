@@ -3,7 +3,7 @@ import { ArrowRight, X, Plus, Send } from 'lucide-react'
 import ReactMarkdown from 'react-markdown'
 import type {
   StudyDesign, StudyDesignType, MeasurementType, Confounder,
-  DialogueMessage, EdaSummary,
+  DialogueMessage, EdaSummary, VariablesPayload,
 } from '../../types/api'
 import { previewTest } from '../../api/client'
 
@@ -12,6 +12,7 @@ interface Props {
   messages: DialogueMessage[]
   studyDesign: StudyDesign | null
   edaSummary?: EdaSummary | null
+  variables?: VariablesPayload | null
   onSend: (msg: string) => Promise<{ tokens: number; isComplete: boolean }>
   onConfirm: (design: StudyDesign) => void | Promise<void>
 }
@@ -31,11 +32,15 @@ const MEASUREMENT_OPTIONS: [MeasurementType, string][] = [
 // The '__init__' prefix marks the dialogue opener: useSession hides it from the
 // visible chat and strips the prefix before sending, so only the framing + BET
 // context below is stored as the first user turn.
-function buildInitMessage(eda?: EdaSummary | null): string {
-  const lines = [
-    '__init__',
-    'I have uploaded my dataset and selected my variables. Please interview me about the study design.',
-  ]
+function buildInitMessage(eda?: EdaSummary | null, vars?: VariablesPayload | null): string {
+  const lines = ['__init__', 'I have uploaded my dataset and selected my variables.']
+  if (vars) {
+    lines.push(`My primary outcome variable is: ${vars.outcome_variable}.`)
+    if (vars.predictor_variable) lines.push(`My predictor variable is: ${vars.predictor_variable}.`)
+    if (vars.hypothesis) lines.push(`My research hypothesis is: ${vars.hypothesis}.`)
+    lines.push('Do not ask me which variables I am studying — I have already specified them above.')
+  }
+  lines.push('Please interview me about the study design.')
   if (eda) {
     lines.push('', `Context from the automated BET dependence screen: ${eda.text}`)
     if (eda.top_pairs.length > 0) {
@@ -94,10 +99,15 @@ const QUICK_REPLY_GROUPS: Array<OptionGroup & { pattern: RegExp }> = [
   },
 ]
 
-function detectQuickReplies(text: string): OptionGroup[] {
-  return QUICK_REPLY_GROUPS
+function detectQuickReplies(text: string, extraGroups: OptionGroup[] = []): OptionGroup[] {
+  const base = QUICK_REPLY_GROUPS
     .filter(g => g.pattern.test(text))
     .map(({ label, options }) => ({ label, options }))
+  // Append any dynamic groups (e.g. variable pairs) that also match
+  const extras = extraGroups.filter(g =>
+    /variable pair|main focus|primary research|outcome.*predictor|predictor.*outcome|which.*variable|research question/i.test(text)
+  )
+  return [...base, ...extras]
 }
 
 // ── Chat pieces ────────────────────────────────────────────────────────────────
@@ -480,7 +490,7 @@ function DesignForm({ onConfirm }: { onConfirm: (design: StudyDesign) => void | 
 
 // ── Main component — LLM chat with form fallback ───────────────────────────────
 
-export default function StepDialogue({ sessionId, messages, studyDesign, edaSummary, onSend, onConfirm }: Props) {
+export default function StepDialogue({ sessionId, messages, studyDesign, edaSummary, variables, onSend, onConfirm }: Props) {
   const [mode, setMode] = useState<'chat' | 'form'>('chat')
   const [input, setInput] = useState('')
   const [sending, setSending] = useState(false)
@@ -533,7 +543,7 @@ export default function StepDialogue({ sessionId, messages, studyDesign, edaSumm
     }
     if (messages.length === 0 && !studyDesign) {
       // Deferred to a microtask so no state update runs synchronously in the effect.
-      const init = buildInitMessage(edaSummary)
+      const init = buildInitMessage(edaSummary, variables)
       queueMicrotask(() => { void runSend(init, true) })
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -561,9 +571,26 @@ export default function StepDialogue({ sessionId, messages, studyDesign, edaSumm
     () => [...messages].reverse().find(m => m.role === 'assistant')?.content ?? '',
     [messages],
   )
+
+  // Dynamic variable-pair options built from the selected variables + BET top pairs.
+  const varPairGroup = useMemo((): OptionGroup | null => {
+    const opts: string[] = []
+    if (variables?.outcome_variable && variables.predictor_variable)
+      opts.push(`${variables.predictor_variable} → ${variables.outcome_variable}`)
+    if (edaSummary?.top_pairs) {
+      for (const p of edaSummary.top_pairs.slice(0, 3)) {
+        const label = `${p.x} × ${p.y}`
+        if (!opts.includes(label)) opts.push(label)
+      }
+    }
+    return opts.length > 0 ? { label: 'Variable focus', options: opts } : null
+  }, [variables, edaSummary])
+
   const quickReplies = useMemo(
-    () => (!captured && !sending) ? detectQuickReplies(lastAssistantMsg) : [],
-    [lastAssistantMsg, captured, sending],
+    () => (!captured && !sending)
+      ? detectQuickReplies(lastAssistantMsg, varPairGroup ? [varPairGroup] : [])
+      : [],
+    [lastAssistantMsg, captured, sending, varPairGroup],
   )
 
   return (
