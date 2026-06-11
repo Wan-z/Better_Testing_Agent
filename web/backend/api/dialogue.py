@@ -43,7 +43,10 @@ async def _stream_dry_run(session_id: str, turn: int) -> object:
         yield _sse({"type": "done", "is_complete": False})
 
 
-def _system_prompt(subtype_suggestive: bool = False) -> str:
+def _system_prompt(
+    subtype_suggestive: bool = False,
+    dataset_columns: list[str] | None = None,
+) -> str:
     """Build the dialogue system prompt, injecting a BET subgroup hint when warranted.
 
     Rule 8 (TECHNICAL_REPORT §6): if BET detected mixture-type nonlinear dependence,
@@ -58,6 +61,14 @@ def _system_prompt(subtype_suggestive: bool = False) -> str:
         "suspected to drive the pattern. When you have enough information call the "
         "capture_study_design tool."
     )
+    if dataset_columns:
+        col_list = ", ".join(dataset_columns)
+        base += (
+            f"\n\nThe dataset contains these columns: {col_list}. "
+            "When recording confounders in capture_study_design, use the exact column name "
+            "for any confounder that is measurable from this dataset (e.g. 'temp_avg_f' not "
+            "'temperature'). Use a descriptive name only for confounders not present in the data."
+        )
     if subtype_suggestive:
         base += (
             "\n\nIMPORTANT: The BET nonlinear-dependence screen flagged mixture-type patterns "
@@ -251,6 +262,12 @@ async def dialogue(session_id: str, payload: DialoguePayload) -> StreamingRespon
             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
         )
 
+    # Inject dataset columns so the LLM uses exact column names for measurable confounders.
+    dataset_columns: list[str] = []
+    if store.exists(session_id, "preview.json"):
+        preview_meta = json.loads(store.read(session_id, "preview.json"))
+        dataset_columns = preview_meta.get("columns", [])
+
     # Rule 8: inject BET subgroup hint into the system prompt when the profile shows
     # mixture-type nonlinear dependence (subtype_suggestive flag set by the profiler).
     subtype_suggestive = False
@@ -258,7 +275,7 @@ async def dialogue(session_id: str, payload: DialoguePayload) -> StreamingRespon
         p = json.loads(store.read(session_id, "profile.json"))
         subtype_suggestive = bool((p.get("eda_summary") or {}).get("subtype_suggestive", False))
 
-    system = _system_prompt(subtype_suggestive)
+    system = _system_prompt(subtype_suggestive, dataset_columns)
 
     # Build message history from stored dialogue
     history_path = "dialogue_history.json"
