@@ -79,8 +79,8 @@ const QUICK_REPLY_GROUPS: Array<OptionGroup & { pattern: RegExp }> = [
   },
   {
     label: 'Measurement structure',
-    pattern: /same participant|independent obs|within.?subject|between.?subject|repeated.?measure|measured.*multiple|multiple.*time|longitudinal/i,
-    options: ['Independent (between subjects)', 'Repeated / paired (within subjects)', 'Mixed / clustered'],
+    pattern: /independent.*across|independence.*obs|same participant|independent obs|within.?subject|between.?subject|repeated.?measure|measured.*multiple|multiple.*time|longitudinal|temporal.*autocorrelation|autocorrelation|spatial.*correlation|panel.*data/i,
+    options: ['Independent (each row is a unique unit)', 'Repeated measures / panel data (same unit over time)', 'Mixed / clustered'],
   },
   {
     label: 'Relationship form',
