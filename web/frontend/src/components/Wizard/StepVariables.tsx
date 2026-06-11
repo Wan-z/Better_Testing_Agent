@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, useMemo } from 'react'
 import { ArrowRight } from 'lucide-react'
 import type { VariableType, VariablesPayload } from '../../types/api'
 
@@ -9,11 +9,65 @@ interface Props {
   onNext: (payload: VariablesPayload) => Promise<void>
 }
 
-const EXAMPLES = [
-  'Counties with more OUD treatment clinics have lower nonfatal overdose ED visit rates',
-  'Treatment group has lower blood pressure than control',
-  'Association between clinic density and overdose ED rate',
-]
+const CONTINUOUS_LIKE: VariableType[] = ['CONTINUOUS', 'COUNT', 'ORDINAL']
+const DISCRETE_LIKE: VariableType[] = ['BINARY', 'CATEGORICAL']
+
+function buildSuggestions(
+  outcome: string,
+  predictor: string | undefined,
+  groupVar: string,
+  types: Record<string, VariableType>,
+): string[] {
+  if (!outcome) return []
+
+  const oType = types[outcome]
+  const pType = predictor ? types[predictor] : null
+  const gVar = groupVar !== '__none__' ? groupVar : null
+
+  // Two continuous/count variables → association / relationship hypotheses
+  if (predictor && CONTINUOUS_LIKE.includes(oType) && pType && CONTINUOUS_LIKE.includes(pType)) {
+    return [
+      `Higher ${predictor} is associated with higher ${outcome}`,
+      `There is a nonlinear relationship between ${predictor} and ${outcome}`,
+      `${predictor} predicts ${outcome} above and beyond other variables`,
+    ]
+  }
+
+  // Continuous outcome, categorical/binary predictor → group-difference hypotheses
+  if (predictor && CONTINUOUS_LIKE.includes(oType) && pType && DISCRETE_LIKE.includes(pType)) {
+    return [
+      `${outcome} differs across ${predictor} groups`,
+      `Units with higher ${predictor} have higher ${outcome}`,
+    ]
+  }
+
+  // Categorical/binary outcome with a continuous predictor → prediction
+  if (predictor && DISCRETE_LIKE.includes(oType) && pType && CONTINUOUS_LIKE.includes(pType)) {
+    return [
+      `Higher ${predictor} increases the probability of ${outcome}`,
+      `${predictor} and ${outcome} are associated`,
+    ]
+  }
+
+  // Both categorical → association
+  if (predictor && DISCRETE_LIKE.includes(oType) && pType && DISCRETE_LIKE.includes(pType)) {
+    return [
+      `${predictor} and ${outcome} are associated`,
+      `The distribution of ${outcome} differs across ${predictor} categories`,
+    ]
+  }
+
+  // Group variable present, no predictor
+  if (gVar) {
+    return [
+      `${outcome} differs across ${gVar} groups`,
+      `${gVar} is associated with ${outcome}`,
+    ]
+  }
+
+  // Outcome only
+  return [`${outcome} is associated with other variables in the dataset`]
+}
 
 const TYPE_COLOURS: Record<VariableType, string> = {
   CONTINUOUS:    'bg-blue-100 text-blue-700',
@@ -63,12 +117,17 @@ export default function StepVariables({ columns, inferredTypes, preview, onNext 
     }
   }
 
+  const predictor = selectedVars.find(v => v !== primaryVar)
+  const suggestions = useMemo(
+    () => buildSuggestions(primaryVar, predictor, group, inferredTypes),
+    [primaryVar, predictor, group, inferredTypes],
+  )
+
   const valid = selectedVars.length > 0 && primaryVar !== '' && hypothesis.trim().length > 0
 
   const handleNext = async () => {
     if (!valid) return
     setLoading(true)
-    const predictor = selectedVars.find(v => v !== primaryVar)
     await onNext({
       outcome_variable: primaryVar,
       predictor_variable: predictor,
@@ -295,17 +354,19 @@ export default function StepVariables({ columns, inferredTypes, preview, onNext 
           className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand resize-none"
         />
       </div>
-      <div className="flex flex-wrap gap-2 mb-8">
-        {EXAMPLES.map(ex => (
-          <button
-            key={ex}
-            onClick={() => setHypothesis(ex)}
-            className="px-3 py-1 text-xs bg-indigo-50 text-brand rounded-full hover:bg-indigo-100 transition-colors"
-          >
-            {ex}
-          </button>
-        ))}
-      </div>
+      {suggestions.length > 0 && (
+        <div className="flex flex-wrap gap-2 mb-8">
+          {suggestions.map(ex => (
+            <button
+              key={ex}
+              onClick={() => setHypothesis(ex)}
+              className="px-3 py-1 text-xs bg-indigo-50 text-brand rounded-full hover:bg-indigo-100 transition-colors text-left"
+            >
+              {ex}
+            </button>
+          ))}
+        </div>
+      )}
 
       <button
         onClick={handleNext}
