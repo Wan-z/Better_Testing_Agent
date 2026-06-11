@@ -11,6 +11,7 @@ export interface SessionState {
   sessionId: string | null
   status: SessionStatus | null
   step: 1 | 2 | 3 | 4 | 5 | 6
+  restoring: boolean   // true while the initial localStorage restore check is in flight
   // Step 1 — Upload
   columns: string[]
   inferredTypes: Record<string, VariableType>
@@ -31,6 +32,7 @@ export interface SessionState {
 
 const INITIAL: SessionState = {
   sessionId: null, status: null, step: 1,
+  restoring: typeof localStorage !== 'undefined' && !!localStorage.getItem(SESSION_STORAGE_KEY),
   columns: [], inferredTypes: {}, preview: [],
   variables: null, profile: null,
   messages: [], studyDesign: null, dialogueTurn: 0,
@@ -54,6 +56,7 @@ export function useSession() {
             sessionId: savedId,
             status: 'COMPLETE',
             step: 6,
+            restoring: false,
             profile: session.profile ?? null,
             studyDesign: session.design ?? null,
             report: session.report,
@@ -61,9 +64,13 @@ export function useSession() {
         } else {
           // Incomplete or failed session — drop the stale reference.
           localStorage.removeItem(SESSION_STORAGE_KEY)
+          update({ restoring: false })
         }
       })
-      .catch(() => localStorage.removeItem(SESSION_STORAGE_KEY))
+      .catch(() => {
+        localStorage.removeItem(SESSION_STORAGE_KEY)
+        update({ restoring: false })
+      })
   }, [update])
 
   // Step 1 — upload CSV

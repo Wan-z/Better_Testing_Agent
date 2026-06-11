@@ -48,7 +48,12 @@ export default function Wizard() {
 
       {/* Step content */}
       <main className="max-w-5xl mx-auto px-4 py-10">
-        {state.step === 1 && <StepUpload onUpload={session.upload} />}
+        {state.restoring && (
+          <div className="flex items-center justify-center h-48 text-slate-400 text-sm">
+            Restoring session…
+          </div>
+        )}
+        {!state.restoring && state.step === 1 && <StepUpload onUpload={session.upload} />}
         {state.step === 2 && state.sessionId && (
           <StepBET
             columns={state.columns}

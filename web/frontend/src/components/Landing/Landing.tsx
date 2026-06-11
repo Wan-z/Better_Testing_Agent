@@ -1,5 +1,9 @@
+import { useState, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { Upload, MessageSquare, BarChart2, ArrowRight, CheckCircle } from 'lucide-react'
+import { Upload, MessageSquare, BarChart2, ArrowRight, CheckCircle, RefreshCw } from 'lucide-react'
+import { getSession } from '../../api/client'
+
+const SESSION_STORAGE_KEY = 'hta_session_id'
 
 const STEPS = [
   { icon: Upload,        label: 'Upload your data',      desc: 'Drop a CSV file — HTA infers variable types automatically.' },
@@ -15,6 +19,15 @@ const TESTS = [
 
 export default function Landing() {
   const navigate = useNavigate()
+  const [hasResumable, setHasResumable] = useState(false)
+
+  useEffect(() => {
+    const savedId = localStorage.getItem(SESSION_STORAGE_KEY)
+    if (!savedId) return
+    getSession(savedId)
+      .then(s => { if (s.status === 'COMPLETE' && s.report) setHasResumable(true) })
+      .catch(() => {})
+  }, [])
 
   return (
     <div className="min-h-screen bg-white">
@@ -46,12 +59,23 @@ export default function Landing() {
           HTA reasons about your study design and causal structure before selecting
           a statistical test — then checks every assumption and writes your methods section.
         </p>
-        <button
-          onClick={() => navigate('/analyse')}
-          className="inline-flex items-center gap-2 px-8 py-4 bg-brand text-white rounded-xl text-lg font-semibold hover:bg-brand-dark transition-colors shadow-lg shadow-indigo-200"
-        >
-          Start analysis <ArrowRight size={20} />
-        </button>
+        <div className="flex flex-col items-center gap-3">
+          <button
+            onClick={() => navigate('/analyse')}
+            className="inline-flex items-center gap-2 px-8 py-4 bg-brand text-white rounded-xl text-lg font-semibold hover:bg-brand-dark transition-colors shadow-lg shadow-indigo-200"
+          >
+            Start analysis <ArrowRight size={20} />
+          </button>
+          {hasResumable && (
+            <button
+              onClick={() => navigate('/analyse')}
+              className="inline-flex items-center gap-2 px-5 py-2.5 bg-white border border-slate-200 text-slate-700 rounded-xl text-sm font-medium hover:bg-slate-50 transition-colors"
+            >
+              <RefreshCw size={14} className="text-brand" />
+              Resume previous analysis
+            </button>
+          )}
+        </div>
         <p className="mt-4 text-sm text-slate-400">No login required · Data stored 7 days · Free</p>
       </section>
 
