@@ -95,7 +95,10 @@ function detectQuickReplies(text: string): string[] {
 
 // ── Chat pieces ────────────────────────────────────────────────────────────────
 
-function ChatBubble({ role, content }: DialogueMessage) {
+function ChatBubble({
+  role, content,
+  chips, onChipClick,
+}: DialogueMessage & { chips?: string[]; onChipClick?: (opt: string) => void }) {
   const isUser = role === 'user'
   return (
     <div className={`flex ${isUser ? 'justify-end' : 'justify-start'}`}>
@@ -103,20 +106,35 @@ function ChatBubble({ role, content }: DialogueMessage) {
         isUser ? 'bg-brand text-white rounded-br-md whitespace-pre-wrap' : 'bg-slate-100 text-slate-800 rounded-bl-md'
       }`}>
         {isUser ? content : (
-          <ReactMarkdown
-            components={{
-              p:      ({ children }) => <p className="mb-2 last:mb-0">{children}</p>,
-              strong: ({ children }) => <strong className="font-semibold">{children}</strong>,
-              em:     ({ children }) => <em className="italic">{children}</em>,
-              ol:     ({ children }) => <ol className="list-decimal pl-4 mb-2 space-y-1">{children}</ol>,
-              ul:     ({ children }) => <ul className="list-disc pl-4 mb-2 space-y-1">{children}</ul>,
-              li:     ({ children }) => <li>{children}</li>,
-              hr:     () => <hr className="border-slate-300 my-2" />,
-              code:   ({ children }) => <code className="bg-slate-200 rounded px-1 text-xs font-mono">{children}</code>,
-            }}
-          >
-            {content}
-          </ReactMarkdown>
+          <>
+            <ReactMarkdown
+              components={{
+                p:      ({ children }) => <p className="mb-2 last:mb-0">{children}</p>,
+                strong: ({ children }) => <strong className="font-semibold">{children}</strong>,
+                em:     ({ children }) => <em className="italic">{children}</em>,
+                ol:     ({ children }) => <ol className="list-decimal pl-4 mb-2 space-y-1">{children}</ol>,
+                ul:     ({ children }) => <ul className="list-disc pl-4 mb-2 space-y-1">{children}</ul>,
+                li:     ({ children }) => <li>{children}</li>,
+                hr:     () => <hr className="border-slate-300 my-2" />,
+                code:   ({ children }) => <code className="bg-slate-200 rounded px-1 text-xs font-mono">{children}</code>,
+              }}
+            >
+              {content}
+            </ReactMarkdown>
+            {chips && chips.length > 0 && (
+              <div className="flex flex-wrap gap-1.5 mt-2 pt-2 border-t border-slate-200">
+                {chips.map(opt => (
+                  <button
+                    key={opt}
+                    onClick={() => onChipClick?.(opt)}
+                    className="px-2.5 py-1 text-xs bg-white border border-indigo-200 text-brand rounded-full hover:bg-indigo-50 active:bg-indigo-100 transition-colors"
+                  >
+                    {opt}
+                  </button>
+                ))}
+              </div>
+            )}
+          </>
         )}
       </div>
     </div>
@@ -536,6 +554,10 @@ export default function StepDialogue({ sessionId, messages, studyDesign, edaSumm
     void runSend(msg)
   }
 
+  const handleChipClick = (opt: string) => {
+    setInput(prev => prev.trim() ? `${prev}; ${opt}` : opt)
+  }
+
   const captured = design !== null
   const awaitingAssistant = sending
     && (messages.length === 0 || messages[messages.length - 1]?.role === 'user')
@@ -576,7 +598,18 @@ export default function StepDialogue({ sessionId, messages, studyDesign, edaSumm
           {/* LEFT (60%) — chat history + input */}
           <div className="lg:col-span-3 bg-white border border-slate-200 rounded-2xl shadow-sm flex flex-col h-[34rem]">
             <div ref={scrollRef} className="flex-1 overflow-y-auto p-4 space-y-3">
-              {messages.map((m, i) => <ChatBubble key={i} role={m.role} content={m.content} />)}
+              {messages.map((m, i) => (
+                <ChatBubble
+                  key={i}
+                  role={m.role}
+                  content={m.content}
+                  chips={
+                    i === messages.length - 1 && m.role === 'assistant'
+                      ? quickReplies : undefined
+                  }
+                  onChipClick={handleChipClick}
+                />
+              ))}
               {awaitingAssistant && <TypingIndicator />}
               {streamError && (
                 <div className="text-xs text-red-700 bg-red-50 border border-red-200 rounded-lg px-3 py-2">
@@ -584,19 +617,6 @@ export default function StepDialogue({ sessionId, messages, studyDesign, edaSumm
                 </div>
               )}
             </div>
-            {quickReplies.length > 0 && (
-              <div className="px-3 pt-2 pb-1 flex flex-wrap gap-1.5 border-t border-slate-100">
-                {quickReplies.map(opt => (
-                  <button
-                    key={opt}
-                    onClick={() => setInput(opt)}
-                    className="px-2.5 py-1 text-xs bg-white border border-indigo-200 text-brand rounded-full hover:bg-indigo-50 transition-colors"
-                  >
-                    {opt}
-                  </button>
-                ))}
-              </div>
-            )}
             <div className="border-t border-slate-100 p-3 flex gap-2">
               <input
                 value={input}
