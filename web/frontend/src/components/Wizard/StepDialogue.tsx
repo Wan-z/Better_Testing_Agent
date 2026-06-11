@@ -79,8 +79,13 @@ const QUICK_REPLY_GROUPS: Array<OptionGroup & { pattern: RegExp }> = [
   },
   {
     label: 'Relationship form',
-    pattern: /relationship.+form|form of.+relationship|what.*relationship|nonlinear|monotone/i,
+    pattern: /relationship.+form|form of.+relationship|shape of.+relationship|what.*relationship|nonlinear|monotone/i,
     options: ['Linear', 'Monotone (nonlinear)', 'Nonlinear / complex', "Don't know"],
+  },
+  {
+    label: 'Latent subgroups',
+    pattern: /latent.?subgroup|hidden.?subtype|subgroup.?structure|subtype.*drive|suspect.*subgroup|subgroup.*suspect|fall into/i,
+    options: ['Yes, likely subgroups present', 'Possibly', 'No / unlikely', "Don't know"],
   },
   {
     label: 'Confounders',
