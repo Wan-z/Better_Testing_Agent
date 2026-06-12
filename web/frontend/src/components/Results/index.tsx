@@ -1,3 +1,4 @@
+import ReactMarkdown from 'react-markdown'
 import type { Report } from '../../types/api'
 import { AssumptionBadge, CaveatBadge, SignificanceBadge } from '../shared/Badge'
 import { CopyButton } from '../shared/CopyButton'
@@ -139,7 +140,7 @@ export default function ResultsView({ report, sessionId }: Props) {
               </p>
             </div>
             <div>
-              <p className="text-slate-500 text-xs">95% CI (difference)</p>
+              <p className="text-slate-500 text-xs">95% CI</p>
               <p className="text-xl font-bold text-slate-900">[{fmt(tr.confidence_interval[0], 1)}, {fmt(tr.confidence_interval[1], 1)}]</p>
             </div>
           </div>
@@ -167,7 +168,9 @@ export default function ResultsView({ report, sessionId }: Props) {
         {/* Plain-language summary */}
         <div className="bg-indigo-50 rounded-xl border border-indigo-200 p-6">
           <p className="text-xs font-semibold text-brand uppercase tracking-wide mb-2">Plain-language summary</p>
-          <p className="text-slate-800 leading-relaxed">{report.plain_language_summary}</p>
+          <div className="text-slate-800 leading-relaxed prose prose-sm max-w-none prose-p:mb-2 prose-p:last:mb-0">
+            <ReactMarkdown>{report.plain_language_summary}</ReactMarkdown>
+          </div>
         </div>
 
         {/* Plots */}

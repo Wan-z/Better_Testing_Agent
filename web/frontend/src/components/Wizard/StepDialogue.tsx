@@ -84,7 +84,7 @@ const QUICK_REPLY_GROUPS: Array<OptionGroup & { pattern: RegExp }> = [
   },
   {
     label: 'Relationship form',
-    pattern: /relationship.+form|form of.+relationship|shape of.+relationship|what.*relationship|nonlinear|monotone/i,
+    pattern: /relationship.+form|form of.+relationship|what.*form.*relationship|linear.*monotone|linear.*nonlinear|monotone.*nonlinear/i,
     options: ['Linear', 'Monotone (nonlinear)', 'Nonlinear / complex', "Don't know"],
   },
   {
@@ -104,7 +104,7 @@ function detectQuickReplies(text: string, extraGroups: OptionGroup[] = []): Opti
     .filter(g => g.pattern.test(text))
     .map(({ label, options }) => ({ label, options }))
   // Append any dynamic groups (e.g. variable pairs) that also match
-  const extras = extraGroups.filter(g =>
+  const extras = extraGroups.filter(() =>
     /variable pair|main focus|primary research|outcome.*predictor|predictor.*outcome|which.*variable|research question/i.test(text)
   )
   return [...base, ...extras]
