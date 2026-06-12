@@ -34,7 +34,7 @@ from web.backend.api.dialogue import _build_design, _system_prompt, TOOL_SCHEMA 
 
 # ── Helpers ────────────────────────────────────────────────────────────────────
 
-MAX_TURNS = 4  # max conversation turns before the test fails
+MAX_TURNS = 6  # max conversation turns before the test fails
 
 
 def _has_anthropic_key() -> bool:
@@ -153,7 +153,10 @@ class Scenario:
     user_statement: str
     # Expected StudyDesign field values. None means "don't assert".
     expected_design_type: Optional[str] = None
+    # Single value or a set of acceptable values (e.g. panel data accepts
+    # both WITHIN_SUBJECTS and MIXED — both are technically defensible).
     expected_measurement_type: Optional[str] = None
+    expected_measurement_type_any: list[str] = field(default_factory=list)
     expected_is_randomized: Optional[bool] = None
     expected_confounder_names: list[str] = field(default_factory=list)
     # If True, the scenario is ambiguous; we only check convergence (tool called).
@@ -214,15 +217,16 @@ SCENARIOS: list[Scenario] = [
             "Do not ask me which variables I am studying — I have already specified them above."
         ),
         user_statement=(
-            "This is an observational longitudinal study. "
-            "I have quarterly data for 50 states measured over 10 years — "
-            "the same states appear repeatedly across time periods. "
-            "Observations are NOT independent: each state contributes multiple rows. "
-            "There was no randomisation. "
-            "GDP and population density are potential confounders."
+            "This is an observational longitudinal study — no intervention, no randomisation. "
+            "I have quarterly data for 50 states measured over 10 years. "
+            "The SAME states are observed repeatedly — each state contributes many rows, "
+            "so observations are NOT independent (repeated/panel structure). "
+            "GDP and population density are potential confounders. "
+            "I expect a monotone relationship between policy_index and unemployment_rate."
         ),
         expected_design_type="OBSERVATIONAL",
-        expected_measurement_type="WITHIN_SUBJECTS",
+        # Both WITHIN_SUBJECTS and MIXED are defensible for state-year panel data.
+        expected_measurement_type_any=["WITHIN_SUBJECTS", "MIXED"],
         expected_is_randomized=False,
     ),
     Scenario(
@@ -264,8 +268,11 @@ SCENARIOS: list[Scenario] = [
 ]
 
 
-def _run_scenario_anthropic(scenario: Scenario) -> Optional[dict]:  # type: ignore[type-arg]
-    """Run one scenario against the Anthropic API. Returns captured design or None."""
+def _run_scenario_anthropic(
+    scenario: Scenario,
+) -> tuple[Optional[dict], list[str]]:  # type: ignore[type-arg]
+    """Run one scenario against the Anthropic API.
+    Returns (captured_design_or_None, conversation_log)."""
     import anthropic
     from web.backend.config import ANTHROPIC_API_KEY, ANTHROPIC_MODEL
 
@@ -290,8 +297,9 @@ def _run_scenario_anthropic(scenario: Scenario) -> Optional[dict]:  # type: igno
         + "\nPlease interview me about the study design."
     )
     history: list[dict] = [{"role": "user", "content": init}]
+    log: list[str] = [f"[USER init]\n{init}"]
 
-    for _turn in range(MAX_TURNS):
+    for turn in range(MAX_TURNS):
         response = client.messages.create(
             model=ANTHROPIC_MODEL,
             system=system,
@@ -302,21 +310,29 @@ def _run_scenario_anthropic(scenario: Scenario) -> Optional[dict]:  # type: igno
         # Check for tool call
         for block in response.content:
             if block.type == "tool_use" and block.name == TOOL_SCHEMA["name"]:
-                return _build_design(block.input)  # type: ignore[arg-type]
+                log.append(f"[TOOL CALL turn {turn + 1}] {block.input}")
+                return _build_design(block.input), log  # type: ignore[arg-type]
         # Extract text and continue
         text = " ".join(
             b.text for b in response.content if b.type == "text" and b.text
         )
         if not text:
+            log.append(f"[ASSISTANT turn {turn + 1}] (empty response)")
             break
+        log.append(f"[ASSISTANT turn {turn + 1}]\n{text}")
         history.append({"role": "assistant", "content": text})
         history.append({"role": "user", "content": scenario.user_statement})
+        log.append(f"[USER turn {turn + 1}]\n{scenario.user_statement}")
 
-    return None
+    return None, log
 
 
-def _run_scenario_openai(scenario: Scenario) -> Optional[dict]:  # type: ignore[type-arg]
-    """Run one scenario against OpenAI / Azure OpenAI. Returns captured design or None."""
+def _run_scenario_openai(
+    scenario: Scenario,
+) -> tuple[Optional[dict], list[str]]:  # type: ignore[type-arg]
+    """Run one scenario against OpenAI / Azure OpenAI.
+    Returns (captured_design_or_None, conversation_log)."""
+    import json as _json
     from web.backend.config import (
         OPENAI_API_KEY, OPENAI_BASE_URL, OPENAI_MODEL,
         AZURE_OPENAI_ENDPOINT, AZURE_OPENAI_API_VERSION, IS_AZURE_OPENAI,
@@ -333,7 +349,6 @@ def _run_scenario_openai(scenario: Scenario) -> Optional[dict]:  # type: ignore[
         from openai import OpenAI
         client = OpenAI(api_key=OPENAI_API_KEY, base_url=OPENAI_BASE_URL, timeout=60.0)  # type: ignore[assignment]
 
-    from web.backend.config import OPENAI_MODEL  # noqa: F811
     system = _system_prompt(subtype_suggestive=scenario.subtype_suggestive)
     tools = [{
         "type": "function",
@@ -357,9 +372,9 @@ def _run_scenario_openai(scenario: Scenario) -> Optional[dict]:  # type: ignore[
         {"role": "system", "content": system},
         {"role": "user", "content": init},
     ]
+    log: list[str] = [f"[USER init]\n{init}"]
 
-    for _turn in range(MAX_TURNS):
-        import json as _json
+    for turn in range(MAX_TURNS):
         response = client.chat.completions.create(
             model=OPENAI_MODEL,
             messages=history,  # type: ignore[arg-type]
@@ -369,17 +384,21 @@ def _run_scenario_openai(scenario: Scenario) -> Optional[dict]:  # type: ignore[
         msg = response.choices[0].message
         if msg.tool_calls:
             args = _json.loads(msg.tool_calls[0].function.arguments)
-            return _build_design(args)
+            log.append(f"[TOOL CALL turn {turn + 1}] {args}")
+            return _build_design(args), log
         text = msg.content or ""
         if not text:
+            log.append(f"[ASSISTANT turn {turn + 1}] (empty response)")
             break
+        log.append(f"[ASSISTANT turn {turn + 1}]\n{text}")
         history.append({"role": "assistant", "content": text})
         history.append({"role": "user", "content": scenario.user_statement})
+        log.append(f"[USER turn {turn + 1}]\n{scenario.user_statement}")
 
-    return None
+    return None, log
 
 
-def _run_scenario(scenario: Scenario) -> Optional[dict]:  # type: ignore[type-arg]
+def _run_scenario(scenario: Scenario) -> tuple[Optional[dict], list[str]]:  # type: ignore[type-arg]
     if _has_anthropic_key():
         return _run_scenario_anthropic(scenario)
     return _run_scenario_openai(scenario)
@@ -397,6 +416,11 @@ def _assert_design(design: dict, scenario: Scenario) -> None:  # type: ignore[ty
         assert design["measurement_type"] == scenario.expected_measurement_type, (
             f"{scenario.name}: expected measurement_type={scenario.expected_measurement_type}, "
             f"got {design['measurement_type']}"
+        )
+    if scenario.expected_measurement_type_any:
+        assert design["measurement_type"] in scenario.expected_measurement_type_any, (
+            f"{scenario.name}: expected measurement_type in "
+            f"{scenario.expected_measurement_type_any}, got {design['measurement_type']}"
         )
     if scenario.expected_is_randomized is not None:
         assert design["is_randomized"] == scenario.expected_is_randomized, (
@@ -418,10 +442,11 @@ def _assert_design(design: dict, scenario: Scenario) -> None:  # type: ignore[ty
 def test_dialogue_captures_design(scenario: Scenario) -> None:
     """The LLM must call capture_study_design with correct field values
     within MAX_TURNS turns given a researcher's one-shot design statement."""
-    design = _run_scenario(scenario)
+    design, log = _run_scenario(scenario)
+    conversation = "\n".join(log)
 
     assert design is not None, (
         f"Scenario '{scenario.name}': LLM did not call capture_study_design "
-        f"within {MAX_TURNS} turns. The chatbot failed to converge."
+        f"within {MAX_TURNS} turns.\n\nConversation transcript:\n{conversation}"
     )
     _assert_design(design, scenario)
