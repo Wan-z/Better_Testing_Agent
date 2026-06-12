@@ -68,3 +68,6 @@ ignore_missing_imports = true
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "--cov=src/hta --cov-report=term-missing"
+markers = [
+    "slow: marks tests that call live LLM APIs (deselect with -m 'not slow')",
+]
