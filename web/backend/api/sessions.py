@@ -38,14 +38,34 @@ _MAX_REPORTED_FINDINGS = 50
 
 
 def _infer_types(df: pd.DataFrame) -> dict[str, str]:
-    """Full VariableType inference via the engine's profiler (CONTINUOUS/ORDINAL/
-    BINARY/CATEGORICAL/COUNT/IDENTIFIER), replacing the old 4-type heuristic."""
-    from hta.modules.profiler import profile_column
+    """Lightweight type heuristic for the upload step — fast enough for any CSV size.
 
-    return {
-        col: profile_column(col, df[col].apply(str).tolist()).var_type
-        for col in df.columns
-    }
+    Full BET-based inference runs later at the Variables step via profile_with_screen.
+    """
+    result: dict[str, str] = {}
+    for col in df.columns:
+        s = df[col].dropna()
+        n_unique = s.nunique()
+        if n_unique <= 1:
+            result[col] = "IDENTIFIER"
+            continue
+        if pd.api.types.is_numeric_dtype(s):
+            if set(s.unique()).issubset({0, 1, 0.0, 1.0}):
+                result[col] = "BINARY"
+            elif n_unique <= 10:
+                result[col] = "ORDINAL"
+            elif (s == s.astype(int, errors="ignore")).all() and s.min() >= 0:
+                result[col] = "COUNT"
+            else:
+                result[col] = "CONTINUOUS"
+        else:
+            if n_unique == 2:
+                result[col] = "BINARY"
+            elif n_unique <= 20:
+                result[col] = "CATEGORICAL"
+            else:
+                result[col] = "IDENTIFIER"
+    return result
 
 
 def _interaction_plotspec(
