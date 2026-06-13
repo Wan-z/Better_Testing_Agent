@@ -7,8 +7,11 @@ services:
       - "8000:8000"
     volumes:
       - session_data:/app/web/data/sessions
-    env_file:
-      - ../.env
+    environment:
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      - LLM_PROVIDER=${LLM_PROVIDER:-anthropic}
+      - ANTHROPIC_MODEL=${ANTHROPIC_MODEL:-claude-sonnet-4-6}
+      - HTA_SESSION_TTL_DAYS=${HTA_SESSION_TTL_DAYS:-7}
     restart: unless-stopped
 
   frontend:
@@ -17,6 +20,9 @@ services:
       dockerfile: web/Dockerfile.frontend
     ports:
       - "80:80"
+    environment:
+      - BACKEND_HOST=backend
+      - BACKEND_PORT=8000
     depends_on:
       - backend
     restart: unless-stopped
