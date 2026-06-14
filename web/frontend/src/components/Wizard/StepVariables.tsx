@@ -145,9 +145,12 @@ export default function StepVariables({ columns, inferredTypes, preview, onNext 
   const handleNext = async () => {
     if (!valid) return
     setLoading(true)
+    // Only pin an explicit predictor when exactly two variables are chosen.
+    // With 3+ the backend auto-selects the most BET-dependent from the pool.
+    const explicitPredictor = selectedVars.length === 2 ? predictor : undefined
     await onNext({
       outcome_variable: primaryVar,
-      predictor_variable: predictor,
+      predictor_variable: explicitPredictor,
       group_variable: group === '__none__' ? undefined : group,
       hypothesis: hypothesis.trim(),
       selected_variables: selectedVars,

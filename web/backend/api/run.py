@@ -86,15 +86,23 @@ async def _run_dry_run(session_id: str) -> object:
 
 
 def _choose_predictor(df: pd.DataFrame, cols: dict, outcome: str,  # type: ignore[type-arg]
-                      group: Optional[str]) -> Optional[str]:
-    """For a no-group correlation analysis, pick the numeric column most BET-dependent
-    with the outcome (so the association uses the most interesting partner)."""
+                      group: Optional[str],
+                      pool: Optional[list[str]] = None) -> Optional[str]:
+    """Pick the numeric column most BET-dependent with the outcome.
+
+    `pool`, when provided, restricts the search to those columns (used when
+    the user selected 3+ variables and wants the strongest among them).
+    Falls back to all numeric columns when pool is absent or empty."""
     if group:
         return None
     if outcome not in cols or cols[outcome].var_type not in _NUMERIC_TYPES:
         return None
-    candidates = [c for c in df.columns
-                  if c != outcome and cols[c].var_type in _NUMERIC_TYPES]
+    if pool:
+        candidates = [c for c in pool
+                      if c != outcome and c in cols and cols[c].var_type in _NUMERIC_TYPES]
+    else:
+        candidates = [c for c in df.columns
+                      if c != outcome and cols[c].var_type in _NUMERIC_TYPES]
     if not candidates:
         return None
     from hta.bet_screen import maxbet
@@ -137,9 +145,9 @@ async def _run_live(session_id: str) -> object:
 
     cols = {c: profile_column(c, df[c].apply(str).tolist()) for c in df.columns}
     raw = {c: df[c].apply(str).tolist() for c in df.columns}
-    # Use an explicitly chosen predictor when the user selected two variables;
-    # fall back to auto-selection (most BET-dependent numeric column).
-    predictor = (variables.get("predictor_variable") or None) or _choose_predictor(df, cols, outcome, group)
+    sel_vars = variables.get("selected_variables") or []
+    pool = [v for v in sel_vars if v != outcome] if len(sel_vars) >= 3 else None
+    predictor = (variables.get("predictor_variable") or None) or _choose_predictor(df, cols, outcome, group, pool=pool)
 
     # ── Step B: select test ───────────────────────────────────────────────────
     yield _sse({"type": "progress", "stage": "selecting_test",
@@ -217,7 +225,9 @@ async def preview_test(session_id: str) -> dict[str, Any]:
 
     cols = {c: profile_column(c, df[c].apply(str).tolist()) for c in df.columns}
     raw = {c: df[c].apply(str).tolist() for c in df.columns}
-    predictor = (variables.get("predictor_variable") or None) or _choose_predictor(df, cols, outcome, group)
+    sel_vars = variables.get("selected_variables") or []
+    pool = [v for v in sel_vars if v != outcome] if len(sel_vars) >= 3 else None
+    predictor = (variables.get("predictor_variable") or None) or _choose_predictor(df, cols, outcome, group, pool=pool)
     selection = select(cols, outcome, group, predictor, hypothesis, raw)
 
     return {

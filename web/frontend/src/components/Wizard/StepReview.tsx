@@ -51,12 +51,28 @@ export default function StepReview({ sessionId, profile, variables, studyDesign,
               <p className="text-slate-500 text-xs">Primary variable</p>
               <p className="font-medium text-slate-800">{variables.outcome_variable}</p>
             </div>
-            {variables.predictor_variable && (
-              <div>
-                <p className="text-slate-500 text-xs">Predictor</p>
-                <p className="font-medium text-slate-800">{variables.predictor_variable}</p>
-              </div>
-            )}
+            {(() => {
+              const pool = (variables.selected_variables ?? []).filter(v => v !== variables.outcome_variable)
+              const isAutoSelect = !variables.predictor_variable && pool.length >= 2
+              if (variables.predictor_variable) {
+                return (
+                  <div>
+                    <p className="text-slate-500 text-xs">Predictor</p>
+                    <p className="font-medium text-slate-800">{variables.predictor_variable}</p>
+                  </div>
+                )
+              }
+              if (isAutoSelect) {
+                return (
+                  <div>
+                    <p className="text-slate-500 text-xs">Predictor pool</p>
+                    <p className="font-medium text-slate-800 text-xs">{pool.join(', ')}</p>
+                    <p className="text-[10px] text-slate-400 mt-0.5">HTA picks the strongest</p>
+                  </div>
+                )
+              }
+              return null
+            })()}
             {variables.group_variable && (
               <div>
                 <p className="text-slate-500 text-xs">Group variable</p>
@@ -70,21 +86,6 @@ export default function StepReview({ sessionId, profile, variables, studyDesign,
               </div>
             )}
           </div>
-          {(() => {
-            const extra = (variables.selected_variables ?? []).filter(
-              v => v !== variables.outcome_variable && v !== variables.predictor_variable
-            )
-            return extra.length > 0 ? (
-              <div className="mt-3 pt-3 border-t border-slate-100">
-                <p className="text-slate-500 text-xs mb-1">Additional selected variables</p>
-                <div className="flex flex-wrap gap-1.5">
-                  {extra.map(v => (
-                    <span key={v} className="px-2 py-0.5 bg-slate-100 text-slate-700 text-xs rounded-full font-medium">{v}</span>
-                  ))}
-                </div>
-              </div>
-            ) : null
-          })()}
           {profile?.notes && profile.notes.length > 0 && (
             <div className="mt-3 pt-3 border-t border-slate-100">
               {profile.notes.map((n, i) => (

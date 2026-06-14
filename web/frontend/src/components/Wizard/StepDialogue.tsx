@@ -611,20 +611,6 @@ export default function StepDialogue({ sessionId, messages, studyDesign, edaSumm
     [messages],
   )
 
-  // Dynamic variable-pair options built from the selected variables + BET top pairs.
-  const varPairGroup = useMemo((): OptionGroup | null => {
-    const opts: string[] = []
-    if (variables?.outcome_variable && variables.predictor_variable)
-      opts.push(`${variables.predictor_variable} → ${variables.outcome_variable}`)
-    if (edaSummary?.top_pairs) {
-      for (const p of edaSummary.top_pairs.slice(0, 3)) {
-        const label = `${p.x} × ${p.y}`
-        if (!opts.includes(label)) opts.push(label)
-      }
-    }
-    return opts.length > 0 ? { label: 'Variable focus', options: opts } : null
-  }, [variables, edaSummary])
-
   const quickReplies = useMemo(() => {
     if (captured || sending) return []
 
@@ -636,19 +622,17 @@ export default function StepDialogue({ sessionId, messages, studyDesign, edaSumm
 
     // Group labels whose pattern already appeared in an earlier assistant turn.
     const seenLabels = new Set<string>()
-    const VAR_FOCUS_RE = /variable pair|main focus|primary research|outcome.*predictor|predictor.*outcome|which.*variable|research question/i
     for (let i = 0; i < lastIdx; i++) {
       const msg = messages[i]
       if (msg.role !== 'assistant') continue
       for (const g of QUICK_REPLY_GROUPS) {
         if (g.pattern.test(msg.content)) seenLabels.add(g.label)
       }
-      if (varPairGroup && VAR_FOCUS_RE.test(msg.content)) seenLabels.add(varPairGroup.label)
     }
 
-    return detectQuickReplies(lastAssistantMsg, varPairGroup ? [varPairGroup] : [])
+    return detectQuickReplies(lastAssistantMsg)
       .filter(g => !seenLabels.has(g.label))
-  }, [lastAssistantMsg, captured, sending, varPairGroup, messages])
+  }, [lastAssistantMsg, captured, sending, messages])
 
   const confounderSuggestions = useMemo(() => {
     const exclude = new Set([
