@@ -45,3 +45,12 @@ web/data/
 
 # Challenge image sidecars (large, optional multimodal feature)
 data/**/images/
+
+# External / demo data in data/ root — not permitted in competition submission
+# (keep only data/train/ and data/val/ subdirectories)
+data/*.csv
+data/*.py
+data/README.md
+
+# Local submission drafts
+kaggle_submission.md
