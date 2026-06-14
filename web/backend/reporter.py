@@ -49,11 +49,113 @@ def _default_design() -> StudyDesign:
     )
 
 
-def _attach_eda(report_dict: dict[str, Any], profile: dict[str, Any]) -> None:
-    """Append the web profile's pre-enriched BET EDA plots to the report plots."""
-    eda = profile.get("eda_plots") if isinstance(profile, dict) else None
+def _eda_var_names(p: dict[str, Any]) -> tuple[str, str]:
+    return (
+        p.get("x_label", "").split(" (")[0],
+        p.get("y_label", "").split(" (")[0],
+    )
+
+
+def _predictor_qq_plot(df: pd.DataFrame, predictor: str) -> dict[str, Any] | None:
+    """Normal Q–Q plot for the predictor variable (mirror of the engine's outcome QQ)."""
+    try:
+        from scipy import stats as _stats
+        vals = pd.to_numeric(df[predictor], errors="coerce").dropna()
+        if len(vals) < 8:
+            return None
+        (theoretical, sample), _ = _stats.probplot(vals)
+        return {
+            "plot_type": "qqplot",
+            "title": f"Normal Q–Q plot — {predictor}",
+            "x_label": "Theoretical quantiles",
+            "y_label": "Sample quantiles",
+            "data": {"theoretical": list(theoretical), "sample": list(sample)},
+        }
+    except Exception:
+        return None
+
+
+def _pair_bet_plot(df: pd.DataFrame, outcome: str, predictor: str) -> dict[str, Any] | None:
+    """BET copula interaction plot for the exact outcome × predictor pair."""
+    try:
+        from hta.bet_screen import interaction_plot
+        from web.backend.plots import plotspec_to_plotly
+
+        x_vals = pd.to_numeric(df[outcome], errors="coerce").dropna()
+        y_vals = pd.to_numeric(df[predictor], errors="coerce").dropna()
+        idx = x_vals.index.intersection(y_vals.index)
+        if len(idx) < 10:
+            return None
+
+        ip = interaction_plot(
+            x_vals.loc[idx].tolist(), y_vals.loc[idx].tolist(),
+            x_name=outcome, y_name=predictor, seed=0,
+        )
+        # Reuse the plotspec builder from sessions.py
+        from web.backend.api.sessions import _interaction_plotspec
+        spec = _interaction_plotspec(ip, color_by="interaction")
+        spec["plotly_json"] = plotspec_to_plotly(spec)
+        return spec
+    except Exception:
+        return None
+
+
+def _attach_eda(
+    report_dict: dict[str, Any],
+    profile: dict[str, Any],
+    df: pd.DataFrame | None = None,
+    outcome: str | None = None,
+    predictor: str | None = None,
+) -> None:
+    """Attach relevant BET EDA plots to the report.
+
+    When outcome and predictor are both known:
+    - Insert a Normal Q–Q plot for the predictor (if not already present).
+    - Ensure the exact outcome × predictor BET copula plot is present.
+    - Keep only EDA pair plots that involve BOTH selected variables; drop
+      pairs from the Explore step that are unrelated to the user's question.
+    - Always keep the dependence network (it shows the full picture).
+    """
+    from web.backend.plots import plotspec_to_plotly
+
+    eda: list[dict[str, Any]] = list(profile.get("eda_plots") or []) \
+        if isinstance(profile, dict) else []
+
+    if outcome and predictor and df is not None:
+        target = {outcome, predictor}
+
+        # Keep only plots involving BOTH selected variables, plus the network.
+        eda = [
+            p for p in eda
+            if p.get("plot_type") == "bet_network"
+            or target <= set(_eda_var_names(p))
+        ]
+
+        # Ensure the exact pair BET copula is present.
+        has_pair = any(
+            p.get("plot_type") == "bet_interaction" and target == set(_eda_var_names(p))
+            for p in eda
+        )
+        if not has_pair:
+            pair_plot = _pair_bet_plot(df, outcome, predictor)
+            if pair_plot:
+                eda = [pair_plot] + eda
+
+        # Insert predictor Q–Q plot after the existing test-result plots.
+        existing = report_dict.get("plots", [])
+        has_pred_qq = any(
+            p.get("plot_type") == "qqplot" and predictor in p.get("title", "")
+            for p in existing
+        )
+        if not has_pred_qq:
+            pred_qq = _predictor_qq_plot(df, predictor)
+            if pred_qq:
+                pred_qq["plotly_json"] = plotspec_to_plotly(pred_qq)
+                existing = list(existing) + [pred_qq]
+                report_dict["plots"] = existing
+
     if eda:
-        report_dict["plots"] = list(report_dict.get("plots", [])) + list(eda)
+        report_dict["plots"] = list(report_dict.get("plots", [])) + eda
 
 
 def _degenerate_report(profile: dict[str, Any], design: dict[str, Any],
@@ -74,7 +176,7 @@ def _degenerate_report(profile: dict[str, Any], design: dict[str, Any],
         "plots": [],
         "methods_text": msg,
     }
-    _attach_eda(report, profile)
+    _attach_eda(report, profile)  # degenerate path: no variable filtering needed
     return report
 
 
@@ -181,5 +283,5 @@ def build_report(
     report = _build_report(profile_model, design_model, result_model, selection, df,
                            outcome, group, predictor, hypothesis)
     report_dict = report.model_dump(mode="json")
-    _attach_eda(report_dict, profile)
+    _attach_eda(report_dict, profile, df=df, outcome=outcome, predictor=predictor)
     return report_dict
