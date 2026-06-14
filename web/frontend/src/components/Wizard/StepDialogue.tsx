@@ -625,12 +625,30 @@ export default function StepDialogue({ sessionId, messages, studyDesign, edaSumm
     return opts.length > 0 ? { label: 'Variable focus', options: opts } : null
   }, [variables, edaSummary])
 
-  const quickReplies = useMemo(
-    () => (!captured && !sending)
-      ? detectQuickReplies(lastAssistantMsg, varPairGroup ? [varPairGroup] : [])
-      : [],
-    [lastAssistantMsg, captured, sending, varPairGroup],
-  )
+  const quickReplies = useMemo(() => {
+    if (captured || sending) return []
+
+    // Find the index of the last assistant message so we only scan history before it.
+    let lastIdx = -1
+    for (let i = messages.length - 1; i >= 0; i--) {
+      if (messages[i].role === 'assistant') { lastIdx = i; break }
+    }
+
+    // Group labels whose pattern already appeared in an earlier assistant turn.
+    const seenLabels = new Set<string>()
+    const VAR_FOCUS_RE = /variable pair|main focus|primary research|outcome.*predictor|predictor.*outcome|which.*variable|research question/i
+    for (let i = 0; i < lastIdx; i++) {
+      const msg = messages[i]
+      if (msg.role !== 'assistant') continue
+      for (const g of QUICK_REPLY_GROUPS) {
+        if (g.pattern.test(msg.content)) seenLabels.add(g.label)
+      }
+      if (varPairGroup && VAR_FOCUS_RE.test(msg.content)) seenLabels.add(varPairGroup.label)
+    }
+
+    return detectQuickReplies(lastAssistantMsg, varPairGroup ? [varPairGroup] : [])
+      .filter(g => !seenLabels.has(g.label))
+  }, [lastAssistantMsg, captured, sending, varPairGroup, messages])
 
   const confounderSuggestions = useMemo(() => {
     const exclude = new Set([
