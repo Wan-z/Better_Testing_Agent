@@ -147,6 +147,7 @@ def _attach_eda(
                 eda = [pair_plot] + eda
 
         # Ensure a BET copula exists for each extra predictor in the pool.
+        # These are supplementary exploratory plots — label them clearly.
         for ep_target in extra_targets:
             has_ep = any(
                 p.get("plot_type") == "bet_interaction" and ep_target == set(_eda_var_names(p))
@@ -157,7 +158,15 @@ def _attach_eda(
                 if ep_var:
                     ep_plot = _pair_bet_plot(df, outcome, ep_var)
                     if ep_plot:
+                        ep_plot["title"] = "Supplementary: " + ep_plot.get("title", "")
                         eda.append(ep_plot)
+            else:
+                # Mark any existing EDA plot for this pair as supplementary too.
+                for p in eda:
+                    if (p.get("plot_type") == "bet_interaction"
+                            and ep_target == set(_eda_var_names(p))
+                            and not p.get("title", "").startswith("Supplementary")):
+                        p["title"] = "Supplementary: " + p.get("title", "")
 
         # Insert predictor Q–Q plot after the existing test-result plots.
         existing = report_dict.get("plots", [])
@@ -198,7 +207,10 @@ def _degenerate_report(profile: dict[str, Any], design: dict[str, Any],
     return report
 
 
-def enrich_prose_with_llm(report: dict[str, Any]) -> dict[str, Any]:
+def enrich_prose_with_llm(report: dict[str, Any],
+                          outcome: str | None = None,
+                          predictor: str | None = None,
+                          extra_predictors: list[str] | None = None) -> dict[str, Any]:
     """Replace the deterministic report prose with a live LLM-generated version.
 
     Calls the configured LLM provider to rewrite `plain_language_summary` and
@@ -217,14 +229,26 @@ def enrich_prose_with_llm(report: dict[str, Any]) -> dict[str, Any]:
         except (TypeError, ValueError):
             return str(v)
 
+    var_context = ""
+    if outcome and predictor:
+        var_context = f"Primary test pair: {outcome} (outcome) × {predictor} (predictor). "
+        if extra_predictors:
+            var_context += (
+                f"The following variables were also selected by the user but were NOT part "
+                f"of the formal statistical test — they appear as supplementary exploratory "
+                f"plots only: {', '.join(extra_predictors)}. "
+                "Do NOT imply these were formally tested or jointly modelled."
+            )
+
     prompt = (
         f"A statistical test ({str(tr.get('test_used', '?')).replace('_', ' ')}) produced:\n"
         f"  p = {_fmt(tr.get('p_value'))},  "
         f"{es.get('measure_name', 'effect')} = {_fmt(es.get('value'))} "
         f"({es.get('interpretation', '')}, "
         f"95% CI [{_fmt(es.get('ci_lower'))}, {_fmt(es.get('ci_upper'))}]).\n"
-        f"  Significant at α = 0.05: {'yes' if tr.get('is_significant') else 'no'}.\n\n"
-        f"Existing plain-language summary (deterministic):\n{report.get('plain_language_summary', '')}\n\n"
+        f"  Significant at α = 0.05: {'yes' if tr.get('is_significant') else 'no'}.\n"
+        + (f"  {var_context}\n" if var_context else "") +
+        f"\nExisting plain-language summary (deterministic):\n{report.get('plain_language_summary', '')}\n\n"
         f"Existing methods text (deterministic):\n{report.get('methods_text', '')}\n\n"
         "Rewrite both for a research paper. Return ONLY valid JSON with keys "
         '"plain" (2–3 sentences, non-statistician audience, lead with the key finding) '

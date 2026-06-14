@@ -183,7 +183,10 @@ async def _run_live(session_id: str) -> object:
     yield _sse({"type": "progress", "stage": "enriching_prose",
                 "message": "Generating plain-language summary…"})
     loop = asyncio.get_event_loop()
-    report = await loop.run_in_executor(None, enrich_prose_with_llm, report)
+    from functools import partial as _partial
+    report = await loop.run_in_executor(
+        None, _partial(enrich_prose_with_llm, report,
+                       outcome=outcome, predictor=predictor, extra_predictors=extra_predictors))
 
     store.write_json(session_id, "report.json", report)
     store.set_status(session_id, "COMPLETE")
