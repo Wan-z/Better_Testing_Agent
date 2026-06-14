@@ -317,6 +317,14 @@ def _run_bet_for_columns(
     }
 
 
+def _plot_var_names(p: dict[str, Any]) -> tuple[str, str]:
+    """Extract bare variable names from a plot's x/y labels (strip ' (copula rank)')."""
+    return (
+        p.get("x_label", "").split(" (")[0],
+        p.get("y_label", "").split(" (")[0],
+    )
+
+
 def _reorder_eda_plots(
     plots: list[dict[str, Any]],
     outcome: str | None,
@@ -327,7 +335,7 @@ def _reorder_eda_plots(
     pairs = [p for p in plots if p.get("plot_type") != "bet_network"]
 
     def _relevance(p: dict[str, Any]) -> int:
-        xl, yl = p.get("x_label", ""), p.get("y_label", "")
+        xl, yl = _plot_var_names(p)
         has_o = bool(outcome and (xl == outcome or yl == outcome))
         has_p = bool(predictor and (xl == predictor or yl == predictor))
         if has_o and has_p:
@@ -338,6 +346,33 @@ def _reorder_eda_plots(
 
     pairs.sort(key=_relevance)
     return pairs + networks
+
+
+def _compute_pair_plot(df: pd.DataFrame, x_col: str, y_col: str) -> dict[str, Any] | None:
+    """Generate a BET copula interaction plot for a specific variable pair.
+
+    Called when the user's chosen outcome × predictor pair is absent from the
+    pre-computed BET EDA (e.g. the Explore step selected different pairs)."""
+    try:
+        from hta.bet_screen import interaction_plot
+        from web.backend.plots import plotspec_to_plotly
+
+        x_vals = pd.to_numeric(df[x_col], errors="coerce").dropna()
+        y_vals = pd.to_numeric(df[y_col], errors="coerce").dropna()
+        idx = x_vals.index.intersection(y_vals.index)
+        if len(idx) < 10:
+            return None
+
+        ip = interaction_plot(
+            x_vals.loc[idx].tolist(),
+            y_vals.loc[idx].tolist(),
+            x_name=x_col, y_name=y_col, seed=0,
+        )
+        spec = _interaction_plotspec(ip, color_by="interaction")
+        spec["plotly_json"] = plotspec_to_plotly(spec)
+        return spec
+    except Exception:
+        return None
 
 
 def _build_profile(
@@ -362,7 +397,22 @@ def _build_profile(
     profile = profile_model.model_dump(mode="json")
 
     if precomputed_bet is not None:
-        raw_plots = precomputed_bet.get("eda_plots", [])
+        raw_plots = list(precomputed_bet.get("eda_plots", []))
+
+        # Ensure the exact outcome × predictor pair is always visualised.
+        # The Explore step may have picked other pairs (different forms, higher
+        # z-scores) without knowing which variables the user would later choose.
+        if outcome and predictor:
+            pair_shown = any(
+                p.get("plot_type") == "bet_interaction" and
+                {outcome, predictor} == set(_plot_var_names(p))
+                for p in raw_plots
+            )
+            if not pair_shown:
+                extra = _compute_pair_plot(df, outcome, predictor)
+                if extra:
+                    raw_plots = [extra] + raw_plots
+
         profile["eda_plots"] = _reorder_eda_plots(raw_plots, outcome, predictor)
         profile["eda_summary"] = precomputed_bet.get("eda_summary")
     elif ctx is not None:
