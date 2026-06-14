@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useId, useMemo, useRef, useState } from 'react'
 import { ArrowRight, X, Plus, Send, CheckCircle } from 'lucide-react'
 import ReactMarkdown from 'react-markdown'
 import type {
@@ -13,6 +13,7 @@ interface Props {
   studyDesign: StudyDesign | null
   edaSummary?: EdaSummary | null
   variables?: VariablesPayload | null
+  columns?: string[]
   onSend: (msg: string) => Promise<{ tokens: number; isComplete: boolean }>
   onConfirm: (design: StudyDesign) => void | Promise<void>
 }
@@ -158,18 +159,34 @@ function TypingIndicator() {
 
 // ── Editable design summary (right panel) ──────────────────────────────────────
 
-function ChipEditor({ items, onAdd, onRemove, placeholder }: {
+function ChipEditor({ items, onAdd, onRemove, placeholder, suggestions }: {
   items: string[]
   onAdd: (value: string) => void
   onRemove: (value: string) => void
   placeholder: string
+  suggestions?: string[]
 }) {
   const [value, setValue] = useState('')
-  const add = () => {
-    const v = value.trim()
-    if (v) onAdd(v)
+  const listId = useId()
+  const available = suggestions?.filter(s => !items.includes(s)) ?? []
+
+  const add = (v = value) => {
+    const trimmed = v.trim()
+    if (trimmed) onAdd(trimmed)
     setValue('')
   }
+
+  const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const v = e.target.value
+    if (available.includes(v)) {
+      // User picked from datalist — add immediately
+      onAdd(v)
+      setValue('')
+    } else {
+      setValue(v)
+    }
+  }
+
   return (
     <div>
       {items.length > 0 && (
@@ -184,16 +201,22 @@ function ChipEditor({ items, onAdd, onRemove, placeholder }: {
           ))}
         </div>
       )}
+      {available.length > 0 && (
+        <datalist id={listId}>
+          {available.map(s => <option key={s} value={s} />)}
+        </datalist>
+      )}
       <div className="flex gap-1.5">
         <input
           value={value}
-          onChange={e => setValue(e.target.value)}
+          onChange={handleChange}
           onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); add() } }}
-          placeholder={placeholder}
+          placeholder={available.length > 0 ? `${placeholder} (or pick from list ▾)` : placeholder}
+          list={available.length > 0 ? listId : undefined}
           className="flex-1 border border-slate-200 rounded-lg px-2.5 py-1.5 text-xs focus:outline-none focus:ring-2 focus:ring-brand"
         />
         <button
-          onClick={add}
+          onClick={() => add()}
           disabled={!value.trim()}
           className="p-1.5 bg-slate-100 text-slate-600 rounded-lg hover:bg-slate-200 transition-colors disabled:opacity-40"
         >
@@ -215,10 +238,11 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
 
 const SELECT_CLS = 'w-full border border-slate-200 rounded-lg px-2.5 py-2 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-brand'
 
-function EditableDesignCard({ draft, onChange, onConfirm }: {
+function EditableDesignCard({ draft, onChange, onConfirm, confounderSuggestions }: {
   draft: StudyDesign
   onChange: (d: StudyDesign) => void
   onConfirm: () => void | Promise<void>
+  confounderSuggestions?: string[]
 }) {
   const addConfounder = (name: string) => {
     if (draft.confounders.some(c => c.name === name)) return
@@ -268,6 +292,7 @@ function EditableDesignCard({ draft, onChange, onConfirm }: {
             onAdd={addConfounder}
             onRemove={name => onChange({ ...draft, confounders: draft.confounders.filter(c => c.name !== name) })}
             placeholder="Add confounder…"
+            suggestions={confounderSuggestions}
           />
         </Field>
         <Field label="Notes">
@@ -490,7 +515,7 @@ function DesignForm({ onConfirm }: { onConfirm: (design: StudyDesign) => void | 
 
 // ── Main component — LLM chat with form fallback ───────────────────────────────
 
-export default function StepDialogue({ sessionId, messages, studyDesign, edaSummary, variables, onSend, onConfirm }: Props) {
+export default function StepDialogue({ sessionId, messages, studyDesign, edaSummary, variables, columns, onSend, onConfirm }: Props) {
   const [mode, setMode] = useState<'chat' | 'form'>('chat')
   const [input, setInput] = useState('')
   const [sending, setSending] = useState(false)
@@ -607,6 +632,14 @@ export default function StepDialogue({ sessionId, messages, studyDesign, edaSumm
     [lastAssistantMsg, captured, sending, varPairGroup],
   )
 
+  const confounderSuggestions = useMemo(() => {
+    const exclude = new Set([
+      variables?.outcome_variable,
+      variables?.predictor_variable,
+    ].filter(Boolean) as string[])
+    return (columns ?? []).filter(c => !exclude.has(c))
+  }, [columns, variables])
+
   return (
     <div>
       <div className="flex items-start justify-between gap-4 mb-6">
@@ -712,6 +745,7 @@ export default function StepDialogue({ sessionId, messages, studyDesign, edaSumm
                 draft={design}
                 onChange={setDraft}
                 onConfirm={() => onConfirm(design)}
+                confounderSuggestions={confounderSuggestions}
               />
             ) : (
               <div className="bg-white rounded-2xl border border-dashed border-slate-300 p-8 text-center">

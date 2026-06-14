@@ -84,6 +84,7 @@ export default function Wizard() {
             studyDesign={state.studyDesign}
             edaSummary={state.profile?.eda_summary ?? null}
             variables={state.variables}
+            columns={state.columns}
             onSend={session.sendMessage}
             onConfirm={session.confirmDesign}
           />
