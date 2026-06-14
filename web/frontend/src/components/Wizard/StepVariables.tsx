@@ -14,15 +14,32 @@ const DISCRETE_LIKE: VariableType[] = ['BINARY', 'CATEGORICAL']
 
 function buildSuggestions(
   outcome: string,
-  predictor: string | undefined,
+  predictors: string[],
   groupVar: string,
   types: Record<string, VariableType>,
 ): string[] {
   if (!outcome) return []
 
+  const predictor = predictors[0]
   const oType = types[outcome]
   const pType = predictor ? types[predictor] : null
   const gVar = groupVar !== '__none__' ? groupVar : null
+
+  // 3+ variables — HTA will auto-select the strongest predictor
+  if (predictors.length >= 2) {
+    const predList = predictors.slice(0, 3).join(', ')
+    if (CONTINUOUS_LIKE.includes(oType)) {
+      return [
+        `${outcome} is associated with one or more of: ${predList}`,
+        `The strongest predictor of ${outcome} among ${predList} is identified`,
+        `One or more of ${predList} explains variance in ${outcome}`,
+      ]
+    }
+    return [
+      `${outcome} is associated with one or more of: ${predList}`,
+      `One of ${predList} is the best predictor of ${outcome}`,
+    ]
+  }
 
   // Two continuous/count variables → association / relationship hypotheses
   if (predictor && CONTINUOUS_LIKE.includes(oType) && pType && CONTINUOUS_LIKE.includes(pType)) {
@@ -119,8 +136,8 @@ export default function StepVariables({ columns, inferredTypes, preview, onNext 
 
   const predictor = selectedVars.find(v => v !== primaryVar)
   const suggestions = useMemo(
-    () => buildSuggestions(primaryVar, predictor, group, inferredTypes),
-    [primaryVar, predictor, group, inferredTypes],
+    () => buildSuggestions(primaryVar, selectedVars.filter(v => v !== primaryVar), group, inferredTypes),
+    [primaryVar, selectedVars, group, inferredTypes],
   )
 
   const valid = selectedVars.length > 0 && primaryVar !== '' && hypothesis.trim().length > 0
