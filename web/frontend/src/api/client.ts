@@ -23,11 +23,21 @@ async function* sseStream(res: Response): AsyncGenerator<Record<string, unknown>
   }
 }
 
+async function extractError(res: Response): Promise<string> {
+  const text = await res.text()
+  try {
+    const json = JSON.parse(text)
+    return json.detail ?? json.message ?? text
+  } catch {
+    return text || `HTTP ${res.status}`
+  }
+}
+
 export async function upload(file: File): Promise<UploadResponse> {
   const form = new FormData()
   form.append('file', file)
   const res = await fetch(`${BASE}/sessions`, { method: 'POST', body: form })
-  if (!res.ok) throw new Error(await res.text())
+  if (!res.ok) throw new Error(await extractError(res))
   return res.json()
 }
 

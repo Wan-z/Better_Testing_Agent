@@ -20,7 +20,12 @@ export default function StepUpload({ onUpload }: Props) {
     try {
       await onUpload(file)
     } catch (e) {
-      setError(String(e))
+      const msg = e instanceof Error ? e.message : String(e)
+      setError(
+        msg.includes('Failed to fetch') || msg.includes('NetworkError') || msg.includes('ECONNREFUSED')
+          ? 'Cannot connect to the server. Make sure the backend is running.'
+          : msg || 'Upload failed. Please try again.'
+      )
       setLoading(false)
     }
   }, [onUpload])
@@ -36,7 +41,12 @@ export default function StepUpload({ onUpload }: Props) {
       setFilename(file.name)
       await onUpload(file)
     } catch (e) {
-      setError(String(e))
+      const msg = e instanceof Error ? e.message : String(e)
+      setError(
+        msg.includes('Failed to fetch') || msg.includes('NetworkError')
+          ? 'Cannot connect to the server. Make sure the backend is running.'
+          : msg || 'Failed to load sample data.'
+      )
       setLoading(false)
     }
   }, [onUpload])

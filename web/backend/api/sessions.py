@@ -183,8 +183,31 @@ def _eda_plots_and_summary(
             return 1
         return 2
 
-    sig_sorted = sorted(sig, key=_pair_priority)
-    chosen = sig_sorted[:max_plots] if sig_sorted else screen.findings[:1]
+    # Select pairs for display: one representative per unique interaction form
+    # (Monotone / Sinusoidal / Parabolic / Checkerboard) so the viewer sees the
+    # variety present in the data, not just the top-z cluster which is often all
+    # Monotone.  Within each form we take the pair with the best user-variable
+    # relevance then highest z-score.  If fewer unique forms exist than max_plots
+    # we fill remaining slots by z-score as before.
+    candidates = sorted(sig, key=lambda f: (_pair_priority(f), -f.bet_z))
+    seen_forms: set[str] = set()
+    chosen: list[Any] = []
+    for f in candidates:
+        if f.form not in seen_forms:
+            chosen.append(f)
+            seen_forms.add(f.form)
+            if len(chosen) >= max_plots:
+                break
+    if len(chosen) < max_plots:
+        chosen_ids = {id(f) for f in chosen}
+        for f in candidates:
+            if id(f) not in chosen_ids:
+                chosen.append(f)
+                chosen_ids.add(id(f))
+                if len(chosen) >= max_plots:
+                    break
+    if not chosen:
+        chosen = screen.findings[:1]
 
     # A categorical column (preferring the chosen group) fully present on the screened
     # rows with 2–8 categories → used to colour the top pair by known subgroup.

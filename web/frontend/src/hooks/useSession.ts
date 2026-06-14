@@ -88,7 +88,8 @@ export function useSession() {
         step: 2,  // → BET Explore step
       })
     } catch (e) {
-      update({ error: String(e) })
+      const msg = e instanceof Error ? (e.message || 'Upload failed') : String(e)
+      update({ error: msg })
       throw e
     }
   }, [update])
