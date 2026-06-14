@@ -24,17 +24,23 @@ export default function Wizard() {
             const stepNum = (i + 1) as 1 | 2 | 3 | 4 | 5 | 6
             const active = state.step === stepNum
             const done   = state.step > stepNum
+            const chip = (
+              <span className={`flex items-center gap-1.5 text-xs font-medium px-2.5 py-1 rounded-full transition-colors ${
+                active ? 'bg-brand text-white' :
+                done   ? 'bg-indigo-100 text-brand hover:bg-indigo-200' :
+                         'text-slate-400'
+              }`}>
+                {done ? '✓' : stepNum}
+                <span className="hidden sm:inline">{label}</span>
+              </span>
+            )
             return (
               <div key={label} className="flex items-center gap-2">
                 {i > 0 && <div className="w-6 h-px bg-slate-200" />}
-                <div className={`flex items-center gap-1.5 text-xs font-medium px-2.5 py-1 rounded-full transition-colors ${
-                  active ? 'bg-brand text-white' :
-                  done   ? 'bg-indigo-100 text-brand' :
-                           'text-slate-400'
-                }`}>
-                  {done ? '✓' : stepNum}
-                  <span className="hidden sm:inline">{label}</span>
-                </div>
+                {done
+                  ? <button title={`Go back to ${label}`} onClick={() => session.update({ step: stepNum })}>{chip}</button>
+                  : chip
+                }
               </div>
             )
           })}
