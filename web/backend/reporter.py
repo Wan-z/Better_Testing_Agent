@@ -106,15 +106,18 @@ def _attach_eda(
     df: pd.DataFrame | None = None,
     outcome: str | None = None,
     predictor: str | None = None,
+    extra_predictors: list[str] | None = None,
 ) -> None:
     """Attach relevant BET EDA plots to the report.
 
     When outcome and predictor are both known:
     - Insert a Normal Q–Q plot for the predictor (if not already present).
     - Ensure the exact outcome × predictor BET copula plot is present.
-    - Keep only EDA pair plots that involve BOTH selected variables; drop
-      pairs from the Explore step that are unrelated to the user's question.
+    - Keep EDA pair plots that involve the main pair OR any extra selected
+      variables (from a 3+ variable pool); drop unrelated Explore pairs.
     - Always keep the dependence network (it shows the full picture).
+    - For each extra predictor, ensure its BET copula with the outcome is
+      also present as a supplementary plot so all selected pairs are shown.
     """
     from web.backend.plots import plotspec_to_plotly
 
@@ -123,15 +126,17 @@ def _attach_eda(
 
     if outcome and predictor and df is not None:
         target = {outcome, predictor}
+        extra_targets = [{outcome, ep} for ep in (extra_predictors or [])]
+        all_targets = [target] + extra_targets
 
-        # Keep only plots involving BOTH selected variables, plus the network.
+        # Keep plots involving the main pair OR any extra selected pair, plus the network.
         eda = [
             p for p in eda
             if p.get("plot_type") == "bet_network"
-            or target <= set(_eda_var_names(p))
+            or any(t <= set(_eda_var_names(p)) for t in all_targets)
         ]
 
-        # Ensure the exact pair BET copula is present.
+        # Ensure the exact pair BET copula is present for the primary pair.
         has_pair = any(
             p.get("plot_type") == "bet_interaction" and target == set(_eda_var_names(p))
             for p in eda
@@ -140,6 +145,19 @@ def _attach_eda(
             pair_plot = _pair_bet_plot(df, outcome, predictor)
             if pair_plot:
                 eda = [pair_plot] + eda
+
+        # Ensure a BET copula exists for each extra predictor in the pool.
+        for ep_target in extra_targets:
+            has_ep = any(
+                p.get("plot_type") == "bet_interaction" and ep_target == set(_eda_var_names(p))
+                for p in eda
+            )
+            if not has_ep:
+                ep_var = next(iter(ep_target - {outcome}), None)
+                if ep_var:
+                    ep_plot = _pair_bet_plot(df, outcome, ep_var)
+                    if ep_plot:
+                        eda.append(ep_plot)
 
         # Insert predictor Q–Q plot after the existing test-result plots.
         existing = report_dict.get("plots", [])
@@ -267,6 +285,7 @@ def build_report(
     group: Optional[str],
     predictor: Optional[str],
     hypothesis: str,
+    extra_predictors: Optional[list[str]] = None,
 ) -> dict[str, Any]:
     """Assemble the report dict the SSE pipeline stores and streams."""
     try:
@@ -283,5 +302,6 @@ def build_report(
     report = _build_report(profile_model, design_model, result_model, selection, df,
                            outcome, group, predictor, hypothesis)
     report_dict = report.model_dump(mode="json")
-    _attach_eda(report_dict, profile, df=df, outcome=outcome, predictor=predictor)
+    _attach_eda(report_dict, profile, df=df, outcome=outcome, predictor=predictor,
+                extra_predictors=extra_predictors)
     return report_dict

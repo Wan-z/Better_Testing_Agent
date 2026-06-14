@@ -148,6 +148,8 @@ async def _run_live(session_id: str) -> object:
     sel_vars = variables.get("selected_variables") or []
     pool = [v for v in sel_vars if v != outcome] if len(sel_vars) >= 3 else None
     predictor = (variables.get("predictor_variable") or None) or _choose_predictor(df, cols, outcome, group, pool=pool)
+    # Extra pool members not chosen as the primary predictor — shown as supplementary plots.
+    extra_predictors = [v for v in (pool or []) if v != predictor] or None
 
     # ── Step B: select test ───────────────────────────────────────────────────
     yield _sse({"type": "progress", "stage": "selecting_test",
@@ -171,7 +173,8 @@ async def _run_live(session_id: str) -> object:
                 "message": "Generating report…"})
     await asyncio.sleep(0)
     report = build_report(profile, design, test_result, selection, df,
-                          outcome, group, predictor, hypothesis)
+                          outcome, group, predictor, hypothesis,
+                          extra_predictors=extra_predictors)
     _enrich_plots(report)
 
     # ── Step E: LLM prose enrichment ─────────────────────────────────────────
