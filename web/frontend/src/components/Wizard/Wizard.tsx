@@ -53,6 +53,7 @@ export default function Wizard() {
             Restoring session…
           </div>
         )}
+        <div key={state.step} className="animate-[fadeIn_0.25s_ease-out]">
         {!state.restoring && state.step === 1 && <StepUpload onUpload={session.upload} />}
         {state.step === 2 && state.sessionId && (
           <StepBET
@@ -101,6 +102,7 @@ export default function Wizard() {
             onReset={session.reset}
           />
         )}
+        </div>
       </main>
     </div>
   )

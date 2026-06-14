@@ -188,7 +188,21 @@ export default function ResultsView({ report, sessionId }: Props) {
         </div>
 
         {/* Export */}
-        <div className="flex justify-end">
+        <div className="flex flex-wrap gap-3 justify-end">
+          <button
+            onClick={() => {
+              const blob = new Blob([JSON.stringify(report, null, 2)], { type: 'application/json' })
+              const url = URL.createObjectURL(blob)
+              const a = document.createElement('a')
+              a.href = url
+              a.download = `hta-report-${sessionId.slice(0, 8)}.json`
+              a.click()
+              URL.revokeObjectURL(url)
+            }}
+            className="inline-flex items-center gap-2 px-5 py-2.5 bg-white border border-slate-200 text-slate-700 rounded-xl text-sm font-medium hover:bg-slate-50 transition-colors"
+          >
+            ⬇ Download JSON
+          </button>
           <a
             href={exportHtmlUrl(sessionId)}
             target="_blank"

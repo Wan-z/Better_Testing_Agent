@@ -89,6 +89,7 @@ export function useSession() {
       })
     } catch (e) {
       update({ error: String(e) })
+      throw e
     }
   }, [update])
 

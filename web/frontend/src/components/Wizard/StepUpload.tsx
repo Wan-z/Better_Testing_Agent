@@ -1,5 +1,5 @@
 import { useCallback, useState } from 'react'
-import { Upload, FileText } from 'lucide-react'
+import { Upload, FileText, FlaskConical } from 'lucide-react'
 
 interface Props { onUpload: (file: File) => Promise<void> }
 
@@ -7,13 +7,38 @@ export default function StepUpload({ onUpload }: Props) {
   const [dragging, setDragging] = useState(false)
   const [loading, setLoading] = useState(false)
   const [filename, setFilename] = useState<string | null>(null)
+  const [error, setError] = useState<string | null>(null)
 
   const handleFile = useCallback(async (file: File) => {
-    if (!file.name.endsWith('.csv')) return
+    if (!file.name.endsWith('.csv')) {
+      setError('Please upload a .csv file.')
+      return
+    }
     setFilename(file.name)
     setLoading(true)
-    await onUpload(file)
-    setLoading(false)
+    setError(null)
+    try {
+      await onUpload(file)
+    } catch (e) {
+      setError(String(e))
+      setLoading(false)
+    }
+  }, [onUpload])
+
+  const handleSampleData = useCallback(async () => {
+    setLoading(true)
+    setError(null)
+    try {
+      const res = await fetch('/sample.csv')
+      if (!res.ok) throw new Error('Could not load sample data.')
+      const blob = await res.blob()
+      const file = new File([blob], 'nc_overdose_counties.csv', { type: 'text/csv' })
+      setFilename(file.name)
+      await onUpload(file)
+    } catch (e) {
+      setError(String(e))
+      setLoading(false)
+    }
   }, [onUpload])
 
   const onDrop = useCallback((e: React.DragEvent) => {
@@ -63,6 +88,27 @@ export default function StepUpload({ onUpload }: Props) {
           </div>
         )}
       </label>
+
+      {error && (
+        <div className="mt-4 p-3 bg-red-50 border border-red-200 rounded-xl text-sm text-red-700">
+          {error}
+        </div>
+      )}
+
+      <div className="mt-5 flex items-center gap-3">
+        <div className="h-px flex-1 bg-slate-200" />
+        <span className="text-xs text-slate-400 shrink-0">or try the built-in sample</span>
+        <div className="h-px flex-1 bg-slate-200" />
+      </div>
+
+      <button
+        onClick={handleSampleData}
+        disabled={loading}
+        className="mt-4 w-full flex items-center justify-center gap-2 px-4 py-3 bg-white border border-slate-200 text-slate-700 rounded-xl text-sm font-medium hover:bg-slate-50 hover:border-indigo-200 transition-colors disabled:opacity-40"
+      >
+        <FlaskConical size={15} className="text-brand" />
+        Load sample data — NC county overdose rates (100 observations)
+      </button>
 
       <div className="mt-6 p-4 bg-blue-50 rounded-xl border border-blue-100">
         <p className="text-sm text-blue-700">

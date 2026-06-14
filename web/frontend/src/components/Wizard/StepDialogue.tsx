@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { ArrowRight, X, Plus, Send } from 'lucide-react'
+import { ArrowRight, X, Plus, Send, CheckCircle } from 'lucide-react'
 import ReactMarkdown from 'react-markdown'
 import type {
   StudyDesign, StudyDesignType, MeasurementType, Confounder,
@@ -500,6 +500,7 @@ export default function StepDialogue({ sessionId, messages, studyDesign, edaSumm
   const [selectedOptions, setSelectedOptions] = useState<Record<string, string>>({})
   const initRef = useRef(false)
   const scrollRef = useRef<HTMLDivElement>(null)
+  const designCardRef = useRef<HTMLDivElement>(null)
 
   // The design captured by the dialogue (done event → hook state), with any local
   // edits from the right panel overlaid.
@@ -564,6 +565,19 @@ export default function StepDialogue({ sessionId, messages, studyDesign, edaSumm
   }
 
   const captured = design !== null
+
+  // Scroll the design card into view the first time the design is captured
+  // (important on mobile where it's below the chat, not beside it).
+  const prevCapturedRef = useRef(false)
+  useEffect(() => {
+    if (captured && !prevCapturedRef.current) {
+      prevCapturedRef.current = true
+      setTimeout(() => {
+        designCardRef.current?.scrollIntoView({ behavior: 'smooth', block: 'nearest' })
+      }, 300)
+    }
+  }, [captured])
+
   const awaitingAssistant = sending
     && (messages.length === 0 || messages[messages.length - 1]?.role === 'user')
 
@@ -656,6 +670,16 @@ export default function StepDialogue({ sessionId, messages, studyDesign, edaSumm
                   </p>
                 </div>
               )}
+              {captured && (
+                <div className="flex items-start gap-2.5 p-3 bg-green-50 border border-green-200 rounded-xl text-sm text-green-800 animate-[fadeIn_0.3s_ease-out]">
+                  <CheckCircle size={16} className="text-green-600 shrink-0 mt-0.5" />
+                  <span>
+                    Design captured — review and confirm the summary{' '}
+                    <span className="lg:inline hidden">on the right</span>
+                    <span className="lg:hidden">below</span>.
+                  </span>
+                </div>
+              )}
               {streamError && (
                 <div className="text-xs text-red-700 bg-red-50 border border-red-200 rounded-lg px-3 py-2">
                   {streamError}
@@ -682,7 +706,7 @@ export default function StepDialogue({ sessionId, messages, studyDesign, edaSumm
           </div>
 
           {/* RIGHT (40%) — study design summary card */}
-          <div className="lg:col-span-2">
+          <div className="lg:col-span-2" ref={designCardRef}>
             {design ? (
               <EditableDesignCard
                 draft={design}
